@@ -71,10 +71,10 @@ class PivotConfig {
 
   factory PivotConfig.fromJson(Map<String, dynamic> json) {
     return PivotConfig(
-      r3: (json['r3'] as num?)?.toDouble() ?? 4473.76,
-      r2: (json['r2'] as num?)?.toDouble() ?? 4432.84,
-      s2: (json['s2'] as num?)?.toDouble() ?? 4300.45,
-      s3: (json['s3'] as num?)?.toDouble() ?? 4259.54,
+      r3: (json['r3'] as num?)?.toDouble() ?? 4657.017,
+      r2: (json['r2'] as num?)?.toDouble() ?? 4580.747,
+      s2: (json['s2'] as num?)?.toDouble() ?? 4333.967,
+      s3: (json['s3'] as num?)?.toDouble() ?? 4257.697,
       tolerance: (json['tolerance'] as num?)?.toDouble() ?? 0.20,
       retriggerDistance: (json['retriggerDistance'] as num?)?.toDouble() ?? 1.00,
       chartTimeframe: json['chartTimeframe']?.toString() ?? '15',
@@ -190,7 +190,7 @@ class PivotStateModel {
 
   PivotStateModel({
     required this.symbol,
-    this.pivotType = 'TRADITIONAL',
+    this.pivotType = 'FIBONACCI',
     this.pivotTimeframe = 'DAILY',
     required this.high,
     required this.low,
