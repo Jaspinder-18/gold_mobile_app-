@@ -17,6 +17,9 @@ class SocketService {
 
   MarketTick? currentTick;
   PivotConfig currentConfig = PivotConfig();
+  SymbolModel? activeSymbolConfig;
+  PivotStateModel? activePivotState;
+  String activeSymbol = 'XAUUSD';
   List<AlertEvent> recentAlerts = [];
   Map<String, String> levelStates = {
     'R3': 'READY',
@@ -32,6 +35,7 @@ class SocketService {
   Function(PivotConfig)? onConfigUpdate;
   Function(List<AlertEvent>)? onAlertsUpdate;
   Function(Map<String, String>)? onLevelStatesUpdate;
+  Function(String, SymbolModel?, PivotStateModel?)? onSymbolUpdate;
 
   bool get isConnected => _isConnected;
   String get serverUrl => _serverUrl;
@@ -76,17 +80,28 @@ class SocketService {
         onConnectionChange?.call(false);
       });
 
-      _socket?.on('market_tick', (data) {
+      void handleTick(dynamic data) {
         if (data != null) {
           final map = Map<String, dynamic>.from(data);
           currentTick = MarketTick.fromJson(map);
           onMarketTick?.call(currentTick!);
         }
-      });
+      }
+      _socket?.on('market_tick', handleTick);
+      _socket?.on('market:tick', handleTick);
 
-      _socket?.on('initial_state', (data) {
+      void handleInitial(dynamic data) {
         if (data != null) {
           final map = Map<String, dynamic>.from(data);
+          if (map['activeSymbol'] != null) {
+            activeSymbol = map['activeSymbol'].toString();
+          }
+          if (map['symbolConfig'] != null) {
+            activeSymbolConfig = SymbolModel.fromJson(Map<String, dynamic>.from(map['symbolConfig']));
+          }
+          if (map['pivotState'] != null) {
+            activePivotState = PivotStateModel.fromJson(Map<String, dynamic>.from(map['pivotState']));
+          }
           if (map['market'] != null) {
             currentTick = MarketTick.fromJson(Map<String, dynamic>.from(map['market']));
             onMarketTick?.call(currentTick!);
@@ -107,6 +122,23 @@ class SocketService {
             });
             onLevelStatesUpdate?.call(levelStates);
           }
+          onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
+        }
+      }
+      _socket?.on('initial_state', handleInitial);
+      _socket?.on('initial:state', handleInitial);
+
+      _socket?.on('symbol:active', (data) {
+        if (data != null) {
+          final map = Map<String, dynamic>.from(data);
+          if (map['symbol'] != null) activeSymbol = map['symbol'].toString();
+          if (map['config'] != null) activeSymbolConfig = SymbolModel.fromJson(Map<String, dynamic>.from(map['config']));
+          if (map['pivotState'] != null) activePivotState = PivotStateModel.fromJson(Map<String, dynamic>.from(map['pivotState']));
+          if (map['market'] != null) {
+            currentTick = MarketTick.fromJson(Map<String, dynamic>.from(map['market']));
+            onMarketTick?.call(currentTick!);
+          }
+          onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
         }
       });
 
@@ -290,6 +322,57 @@ class SocketService {
       }
     } catch (e) {
       // Error
+    }
+    return false;
+  }
+
+  Future<List<SymbolModel>> searchSymbols(String query, {String assetType = 'ALL'}) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$_serverUrl/api/symbols/search?q=$query&assetType=$assetType'),
+      ).timeout(const Duration(seconds: 5));
+
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body);
+        if (body['data'] != null && body['data'] is List) {
+          return (body['data'] as List).map((i) => SymbolModel.fromJson(Map<String, dynamic>.from(i))).toList();
+        }
+      }
+    } catch (e) {
+      // Ignore
+    }
+    return [];
+  }
+
+  Future<bool> switchSymbol(String symbol) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$_serverUrl/api/symbols/active'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'symbol': symbol}),
+      ).timeout(const Duration(seconds: 8));
+
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body);
+        if (body['data'] != null) {
+          final data = Map<String, dynamic>.from(body['data']);
+          activeSymbol = data['symbol']?.toString() ?? symbol;
+          if (data['config'] != null) {
+            activeSymbolConfig = SymbolModel.fromJson(Map<String, dynamic>.from(data['config']));
+          }
+          if (data['pivotState'] != null) {
+            activePivotState = PivotStateModel.fromJson(Map<String, dynamic>.from(data['pivotState']));
+          }
+          if (data['market'] != null) {
+            currentTick = MarketTick.fromJson(Map<String, dynamic>.from(data['market']));
+            onMarketTick?.call(currentTick!);
+          }
+          onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
+          return true;
+        }
+      }
+    } catch (e) {
+      // Ignore
     }
     return false;
   }

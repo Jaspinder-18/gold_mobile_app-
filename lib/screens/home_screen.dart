@@ -79,11 +79,155 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (mounted) setState(() => _isConnected = connected);
     };
 
+    _socketService.onSymbolUpdate = (symbol, symConfig, pivotState) {
+      if (mounted) setState(() {});
+    };
+
     _socketService.onAlertTriggered = (event) {
       if (mounted) {
         _showIncomingAlertDialog(event);
       }
     };
+  }
+
+  void _showSymbolSearchBottomSheet() {
+    String searchQ = '';
+    String assetTab = 'ALL';
+    List<SymbolModel> searchResults = [];
+    bool isSearching = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0B1120),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (bctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            void runSearch() async {
+              setModalState(() => isSearching = true);
+              final results = await _socketService.searchSymbols(searchQ, assetType: assetTab);
+              if (ctx.mounted) {
+                setModalState(() {
+                  searchResults = results;
+                  isSearching = false;
+                });
+              }
+            }
+
+            if (searchResults.isEmpty && !isSearching && searchQ.isEmpty) {
+              runSearch();
+            }
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.75,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  // Handle
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(color: Colors.grey[700], borderRadius: BorderRadius.circular(2)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // Search Bar
+                  TextField(
+                    autofocus: true,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Search symbol (Gold, BTC, Nifty, EURUSD)...',
+                      hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                      prefixIcon: const Icon(Icons.search, color: Color(0xFFF59E0B), size: 18),
+                      filled: true,
+                      fillColor: const Color(0xFF1E293B),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                    onChanged: (val) {
+                      searchQ = val;
+                      runSearch();
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  // Category Tabs
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: ['ALL', 'COMMODITY', 'CRYPTO', 'FOREX', 'INDEX', 'STOCK'].map((tab) {
+                        final isSel = assetTab == tab;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: ChoiceChip(
+                            label: Text(tab, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isSel ? Colors.black : Colors.white70)),
+                            selected: isSel,
+                            selectedColor: const Color(0xFFF59E0B),
+                            backgroundColor: const Color(0xFF1E293B),
+                            onSelected: (sel) {
+                              if (sel) {
+                                setModalState(() => assetTab = tab);
+                                runSearch();
+                              }
+                            },
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  // Results List
+                  Expanded(
+                    child: isSearching
+                        ? const Center(child: CircularProgressIndicator(color: Color(0xFFF59E0B)))
+                        : searchResults.isEmpty
+                            ? const Center(child: Text('No matching assets found', style: TextStyle(color: Colors.grey, fontSize: 12)))
+                            : ListView.builder(
+                                itemCount: searchResults.length,
+                                itemBuilder: (ctx, idx) {
+                                  final sym = searchResults[idx];
+                                  final isActive = _socketService.activeSymbol == sym.symbol;
+                                  return Card(
+                                    color: isActive ? const Color(0xFFF59E0B).withOpacity(0.15) : const Color(0xFF131D31),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(color: isActive ? const Color(0xFFF59E0B) : const Color(0xFF1E293B)),
+                                    ),
+                                    child: ListTile(
+                                      title: Row(
+                                        children: [
+                                          Text(sym.symbol, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                                          const SizedBox(width: 8),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(color: const Color(0xFF1E293B), borderRadius: BorderRadius.circular(4)),
+                                            child: Text(sym.assetType, style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 9, fontWeight: FontWeight.bold)),
+                                          ),
+                                        ],
+                                      ),
+                                      subtitle: Text('${sym.displayName} • ${sym.exchange}', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                                      trailing: isActive
+                                          ? const Icon(Icons.check_circle, color: Color(0xFFF59E0B), size: 20)
+                                          : const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 14),
+                                      onTap: () async {
+                                        Navigator.pop(bctx);
+                                        await _socketService.switchSymbol(sym.symbol);
+                                      },
+                                    ),
+                                  );
+                                },
+                              ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   void _showIncomingAlertDialog(AlertEvent event) {
@@ -231,50 +375,64 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         backgroundColor: const Color(0xFF0E1626),
         elevation: 0,
         titleSpacing: 12,
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(5),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Icon(Icons.show_chart, color: Color(0xFFF59E0B), size: 18),
-            ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        title: InkWell(
+          onTap: _showSymbolSearchBottomSheet,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'GOLD (XAU/USD)',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14),
+                Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF59E0B).withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(Icons.search, color: Color(0xFFF59E0B), size: 16),
                 ),
-                Row(
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: _isConnected ? Colors.greenAccent : Colors.redAccent,
-                        shape: BoxShape.circle,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          _socketService.activeSymbol,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14, fontFamily: 'monospace'),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.keyboard_arrow_down, color: Color(0xFFF59E0B), size: 16),
+                      ],
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      _isConnected ? 'LIVE FEED ACTIVE' : 'CONNECTING...',
-                      style: TextStyle(
-                        color: _isConnected ? Colors.greenAccent : Colors.redAccent,
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                        fontFamily: 'monospace',
-                      ),
+                    Row(
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: _isConnected ? Colors.greenAccent : Colors.redAccent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _isConnected ? 'LIVE FEED ACTIVE' : 'CONNECTING...',
+                          style: TextStyle(
+                            color: _isConnected ? Colors.greenAccent : Colors.redAccent,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ],
             ),
-          ],
+          ),
         ),
         actions: [
           IconButton(

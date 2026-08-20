@@ -137,3 +137,96 @@ class AlertEvent {
     );
   }
 }
+
+class SymbolModel {
+  final String symbol;
+  final String displayName;
+  final String assetType;
+  final String exchange;
+  final String provider;
+  final String tradingViewTicker;
+  final int priceDecimals;
+
+  SymbolModel({
+    required this.symbol,
+    required this.displayName,
+    required this.assetType,
+    required this.exchange,
+    required this.provider,
+    required this.tradingViewTicker,
+    this.priceDecimals = 2,
+  });
+
+  factory SymbolModel.fromJson(Map<String, dynamic> json) {
+    return SymbolModel(
+      symbol: json['symbol']?.toString() ?? 'XAUUSD',
+      displayName: json['displayName']?.toString() ?? 'Gold / USD',
+      assetType: json['assetType']?.toString() ?? 'COMMODITY',
+      exchange: json['exchange']?.toString() ?? 'OANDA',
+      provider: json['provider']?.toString() ?? 'TradingView',
+      tradingViewTicker: json['tradingViewTicker']?.toString() ?? 'OANDA:XAUUSD',
+      priceDecimals: (json['priceDecimals'] as num?)?.toInt() ?? 2,
+    );
+  }
+}
+
+class PivotStateModel {
+  final String symbol;
+  final String pivotType;
+  final String pivotTimeframe;
+  final double high;
+  final double low;
+  final double close;
+  final double p;
+  final double r1;
+  final double r2;
+  final double r3;
+  final double s1;
+  final double s2;
+  final double s3;
+  final bool isValid;
+  final String periodDateStr;
+  final DateTime? nextRolloverAt;
+
+  PivotStateModel({
+    required this.symbol,
+    this.pivotType = 'TRADITIONAL',
+    this.pivotTimeframe = 'DAILY',
+    required this.high,
+    required this.low,
+    required this.close,
+    required this.p,
+    required this.r1,
+    required this.r2,
+    required this.r3,
+    required this.s1,
+    required this.s2,
+    required this.s3,
+    this.isValid = true,
+    this.periodDateStr = '',
+    this.nextRolloverAt,
+  });
+
+  factory PivotStateModel.fromJson(Map<String, dynamic> json) {
+    return PivotStateModel(
+      symbol: json['symbol']?.toString() ?? 'XAUUSD',
+      pivotType: json['pivotType']?.toString() ?? 'TRADITIONAL',
+      pivotTimeframe: json['pivotTimeframe']?.toString() ?? 'DAILY',
+      high: (json['high'] as num?)?.toDouble() ?? 0.0,
+      low: (json['low'] as num?)?.toDouble() ?? 0.0,
+      close: (json['close'] as num?)?.toDouble() ?? 0.0,
+      p: (json['p'] as num?)?.toDouble() ?? 0.0,
+      r1: (json['r1'] as num?)?.toDouble() ?? 0.0,
+      r2: (json['r2'] as num?)?.toDouble() ?? 0.0,
+      r3: (json['r3'] as num?)?.toDouble() ?? 0.0,
+      s1: (json['s1'] as num?)?.toDouble() ?? 0.0,
+      s2: (json['s2'] as num?)?.toDouble() ?? 0.0,
+      s3: (json['s3'] as num?)?.toDouble() ?? 0.0,
+      isValid: json['isValid'] ?? true,
+      periodDateStr: json['periodDateStr']?.toString() ?? '',
+      nextRolloverAt: json['nextRolloverAt'] != null
+          ? DateTime.tryParse(json['nextRolloverAt'].toString())
+          : null,
+    );
+  }
+}
