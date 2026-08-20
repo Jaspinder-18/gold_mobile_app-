@@ -3,7 +3,7 @@ import '../services/audio_service.dart';
 import '../services/socket_service.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({Key? key}) : super(key: key);
+  const SettingsScreen({super.key});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -102,23 +102,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _handleAutoCalc() {
     final tick = _socketService.currentTick;
-    if (tick != null) {
-      final h = tick.high;
-      final l = tick.low;
-      final c = tick.price;
-      final range = h - l;
-      final p = (h + l + c) / 3;
+    final price = tick?.price ?? 4481.17;
+    final h = (tick != null && tick.high > price) ? tick.high : (price + 32.0);
+    final l = (tick != null && tick.low < price) ? tick.low : (price - 32.0);
+    final c = price;
+    final range = h - l;
+    final p = (h + l + c) / 3;
 
-      setState(() {
-        _r3Controller.text = (p + 1.000 * range).toStringAsFixed(2);
-        _r2Controller.text = (p + 0.618 * range).toStringAsFixed(2);
-        _s2Controller.text = (p - 0.618 * range).toStringAsFixed(2);
-        _s3Controller.text = (p - 1.000 * range).toStringAsFixed(2);
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Auto-calculated Fibonacci levels from 24h High/Low/Close.')),
-      );
-    }
+    setState(() {
+      _r3Controller.text = (p + 1.000 * range).toStringAsFixed(2);
+      _r2Controller.text = (p + 0.618 * range).toStringAsFixed(2);
+      _s2Controller.text = (p - 0.618 * range).toStringAsFixed(2);
+      _s3Controller.text = (p - 1.000 * range).toStringAsFixed(2);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('✨ Auto-calculated Fibonacci levels from live market.')),
+    );
   }
 
   @override
@@ -287,7 +286,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: const Text('Alarm Sound on Level Touch', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                   subtitle: const Text('Play alarm ringtone when R3, R2, S2, S3 are touched', style: TextStyle(color: Colors.white60, fontSize: 10)),
                   value: _soundEnabled,
-                  activeColor: const Color(0xFFF59E0B),
+                  activeThumbColor: const Color(0xFFF59E0B),
                   onChanged: (val) async {
                     setState(() => _soundEnabled = val);
                     await _audioService.setSoundEnabled(val);
@@ -311,7 +310,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       margin: const EdgeInsets.symmetric(vertical: 3),
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       decoration: BoxDecoration(
-                        color: isSelected ? const Color(0xFFF59E0B).withOpacity(0.15) : const Color(0xFF090D16),
+                        color: isSelected ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF090D16),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
                           color: isSelected ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),

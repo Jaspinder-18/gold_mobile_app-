@@ -31,6 +31,7 @@ class SocketService {
   Function(bool)? onConnectionChange;
   Function(PivotConfig)? onConfigUpdate;
   Function(List<AlertEvent>)? onAlertsUpdate;
+  Function(Map<String, String>)? onLevelStatesUpdate;
 
   bool get isConnected => _isConnected;
   String get serverUrl => _serverUrl;
@@ -86,22 +87,25 @@ class SocketService {
       _socket?.on('initial_state', (data) {
         if (data != null) {
           final map = Map<String, dynamic>.from(data);
-          if (map['price'] != null) {
-            currentTick = MarketTick(
-              symbol: map['symbol'] ?? 'XAUUSD',
-              price: (map['price'] as num).toDouble(),
-              high: (map['high'] as num?)?.toDouble() ?? 4370.0,
-              low: (map['low'] as num?)?.toDouble() ?? 4340.0,
-              open: (map['open'] as num?)?.toDouble() ?? 4350.0,
-              change: (map['change'] as num?)?.toDouble() ?? 0.0,
-              changePercent: (map['changePercent'] as num?)?.toDouble() ?? 0.0,
-              timestamp: DateTime.now(),
-            );
+          if (map['market'] != null) {
+            currentTick = MarketTick.fromJson(Map<String, dynamic>.from(map['market']));
+            onMarketTick?.call(currentTick!);
+          } else if (map['price'] != null) {
+            currentTick = MarketTick.fromJson(map);
             onMarketTick?.call(currentTick!);
           }
           if (map['config'] != null) {
             currentConfig = PivotConfig.fromJson(Map<String, dynamic>.from(map['config']));
             onConfigUpdate?.call(currentConfig);
+          }
+          if (map['alertStates'] != null && map['alertStates'] is Map) {
+            final states = Map<String, dynamic>.from(map['alertStates']);
+            states.forEach((k, v) {
+              if (v is Map && v['status'] != null) {
+                levelStates[k] = v['status'].toString();
+              }
+            });
+            onLevelStatesUpdate?.call(levelStates);
           }
         }
       });
@@ -120,7 +124,17 @@ class SocketService {
           final event = AlertEvent.fromJson(map);
 
           // Update level state color
-          levelStates[event.level] = 'TRIGGERED';
+          if (map['alertStates'] != null && map['alertStates'] is Map) {
+            final states = Map<String, dynamic>.from(map['alertStates']);
+            states.forEach((k, v) {
+              if (v is Map && v['status'] != null) {
+                levelStates[k] = v['status'].toString();
+              }
+            });
+          } else {
+            levelStates[event.level] = 'TRIGGERED';
+          }
+          onLevelStatesUpdate?.call(levelStates);
 
           // Update alerts list (strict 6 items)
           recentAlerts.insert(0, event);
@@ -141,6 +155,27 @@ class SocketService {
       _isConnected = false;
       onConnectionChange?.call(false);
     }
+  }
+
+  Future<bool> autoCalculatePivots() async {
+    try {
+      final res = await http.post(
+        Uri.parse('$_serverUrl/api/config/auto-calculate'),
+        headers: {'Content-Type': 'application/json'},
+      ).timeout(const Duration(seconds: 8));
+
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body);
+        if (body['data'] != null) {
+          currentConfig = PivotConfig.fromJson(Map<String, dynamic>.from(body['data']));
+          onConfigUpdate?.call(currentConfig);
+          return true;
+        }
+      }
+    } catch (e) {
+      // Fallback
+    }
+    return false;
   }
 
   Future<bool> updateRemoteConfig(Map<String, dynamic> updates) async {

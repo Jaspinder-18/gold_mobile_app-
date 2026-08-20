@@ -8,7 +8,7 @@ import '../services/socket_service.dart';
 class ScreenshotViewerScreen extends StatelessWidget {
   final AlertEvent event;
 
-  const ScreenshotViewerScreen({Key? key, required this.event}) : super(key: key);
+  const ScreenshotViewerScreen({super.key, required this.event});
 
   Color _getLevelColor(String level) {
     if (level.startsWith('R')) return const Color(0xFFEF4444);
@@ -42,7 +42,7 @@ class ScreenshotViewerScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: levelColor.withOpacity(0.2),
+                color: levelColor.withValues(alpha: 0.2),
                 border: Border.all(color: levelColor, width: 1.5),
                 borderRadius: BorderRadius.circular(6),
               ),
@@ -120,7 +120,7 @@ class ScreenshotViewerScreen extends StatelessWidget {
                       const SizedBox(height: 16),
                       Text(
                         'Loading TradingView Chart Screenshot...',
-                        style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
                       ),
                     ],
                   ),
@@ -154,14 +154,14 @@ class ScreenshotViewerScreen extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
+                      const Text(
                         'Gold Spot / U.S. Dollar (XAU/USD)',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF10B981).withOpacity(0.2),
+                          color: const Color(0xFF10B981).withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: const Text(
@@ -174,14 +174,14 @@ class ScreenshotViewerScreen extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     dateFormat.format(event.timestamp),
-                    style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11, fontFamily: 'monospace'),
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 11, fontFamily: 'monospace'),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     event.triggerReason.isNotEmpty
                         ? event.triggerReason
                         : 'Gold touched ${event.level} @ \$${event.currentPrice.toStringAsFixed(2)}',
-                    style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 12),
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 12),
                   ),
                 ],
               ),

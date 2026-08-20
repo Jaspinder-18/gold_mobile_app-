@@ -1,6 +1,8 @@
 class MarketTick {
   final String symbol;
   final double price;
+  final double bid;
+  final double ask;
   final double high;
   final double low;
   final double open;
@@ -11,6 +13,8 @@ class MarketTick {
   MarketTick({
     required this.symbol,
     required this.price,
+    required this.bid,
+    required this.ask,
     required this.high,
     required this.low,
     required this.open,
@@ -20,11 +24,14 @@ class MarketTick {
   });
 
   factory MarketTick.fromJson(Map<String, dynamic> json) {
+    final p = (json['price'] as num?)?.toDouble() ?? 4356.40;
     return MarketTick(
       symbol: json['symbol'] ?? 'XAUUSD',
-      price: (json['price'] as num?)?.toDouble() ?? 4356.40,
-      high: (json['high'] as num?)?.toDouble() ?? 4370.00,
-      low: (json['low'] as num?)?.toDouble() ?? 4340.00,
+      price: p,
+      bid: (json['bid'] as num?)?.toDouble() ?? (p - 0.25),
+      ask: (json['ask'] as num?)?.toDouble() ?? (p + 0.25),
+      high: (json['high'] as num?)?.toDouble() ?? (json['high24h'] as num?)?.toDouble() ?? 4370.00,
+      low: (json['low'] as num?)?.toDouble() ?? (json['low24h'] as num?)?.toDouble() ?? 4340.00,
       open: (json['open'] as num?)?.toDouble() ?? 4350.00,
       change: (json['change'] as num?)?.toDouble() ?? 0.0,
       changePercent: (json['changePercent'] as num?)?.toDouble() ?? 0.0,
@@ -46,6 +53,7 @@ class PivotConfig {
   final String chartRange;
   final int barSpacing;
   final bool telegramAlertsEnabled;
+  final bool autoCalculatePivot;
 
   PivotConfig({
     this.r3 = 4473.76,
@@ -58,6 +66,7 @@ class PivotConfig {
     this.chartRange = '1D',
     this.barSpacing = 22,
     this.telegramAlertsEnabled = true,
+    this.autoCalculatePivot = false,
   });
 
   factory PivotConfig.fromJson(Map<String, dynamic> json) {
@@ -72,6 +81,7 @@ class PivotConfig {
       chartRange: json['chartRange']?.toString() ?? '1D',
       barSpacing: (json['barSpacing'] as num?)?.toInt() ?? 22,
       telegramAlertsEnabled: json['telegramAlertsEnabled'] ?? true,
+      autoCalculatePivot: json['autoCalculatePivot'] ?? false,
     );
   }
 }
