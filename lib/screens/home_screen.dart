@@ -616,22 +616,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
           const SizedBox(height: 12),
 
-          // Screenshot Timeframe Selector
+          // Screenshot Timeframe, Chart Range & Bar Spacing Selector
           Container(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: const Color(0xFF070A12),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(color: const Color(0xFF1E293B)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Row(
+                // 1. Timeframe Row
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Icon(Icons.layers, color: Color(0xFFF59E0B), size: 12),
-                    SizedBox(width: 4),
-                    Text('SCREENSHOT TIMEFRAME:', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.w900, fontSize: 9, letterSpacing: 0.5)),
+                    const Row(
+                      children: [
+                        Icon(Icons.timer_outlined, color: Color(0xFFF59E0B), size: 12),
+                        SizedBox(width: 4),
+                        Text('TIMEFRAME:', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w900, fontSize: 9, letterSpacing: 0.5)),
+                      ],
+                    ),
+                    Text(
+                      '${_config.chartTimeframe}m active',
+                      style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 9, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 6),
@@ -639,10 +649,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: _timeframes.map((tf) {
-                      final isSelected = _config.chartTimeframe == tf || (_config.chartTimeframe == '15' && tf == '15M') || (_config.chartTimeframe == '5' && tf == '5M');
+                      final cleanTf = tf.replaceAll('M', '');
+                      final isSelected = _config.chartTimeframe == cleanTf || _config.chartTimeframe == tf || (_config.chartTimeframe == '15' && tf == '15M') || (_config.chartTimeframe == '5' && tf == '5M');
                       return GestureDetector(
                         onTap: () {
-                          final cleanTf = tf.replaceAll('M', '');
+                          setState(() {
+                            _config = PivotConfig(
+                              r3: _config.r3,
+                              r2: _config.r2,
+                              s2: _config.s2,
+                              s3: _config.s3,
+                              tolerance: _config.tolerance,
+                              retriggerDistance: _config.retriggerDistance,
+                              chartTimeframe: cleanTf,
+                              chartRange: _config.chartRange,
+                              barSpacing: _config.barSpacing,
+                              telegramAlertsEnabled: _config.telegramAlertsEnabled,
+                              autoCalculatePivot: _config.autoCalculatePivot,
+                            );
+                          });
                           _socketService.updateRemoteConfig({'chartTimeframe': cleanTf});
                         },
                         child: Container(
@@ -656,7 +681,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           child: Text(
                             tf,
                             style: TextStyle(
-                              color: isSelected ? Colors.black : Colors.white60,
+                              color: isSelected ? Colors.black : Colors.white70,
                               fontWeight: FontWeight.w900,
                               fontSize: 10,
                               fontFamily: 'monospace',
@@ -666,6 +691,114 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       );
                     }).toList(),
                   ),
+                ),
+
+                const SizedBox(height: 10),
+                const Divider(color: Color(0xFF1E293B), height: 1),
+                const SizedBox(height: 8),
+
+                // 2. Chart Range (1D, 2D, 3D, 5D) & Bar Spacing
+                Row(
+                  children: [
+                    // Range
+                    Expanded(
+                      flex: 3,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.calendar_view_day, color: Color(0xFFF59E0B), size: 11),
+                              SizedBox(width: 4),
+                              Text('RANGE:', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w900, fontSize: 9, letterSpacing: 0.5)),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: ['1D', '2D', '3D', '5D'].map((r) {
+                              final isSel = _config.chartRange == r;
+                              return Expanded(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final dynamicSpacing = r == '1D' ? 22 : (r == '2D' ? 14 : (r == '3D' ? 9 : 6));
+                                    setState(() {
+                                      _config = PivotConfig(
+                                        r3: _config.r3,
+                                        r2: _config.r2,
+                                        s2: _config.s2,
+                                        s3: _config.s3,
+                                        tolerance: _config.tolerance,
+                                        retriggerDistance: _config.retriggerDistance,
+                                        chartTimeframe: _config.chartTimeframe,
+                                        chartRange: r,
+                                        barSpacing: dynamicSpacing,
+                                        telegramAlertsEnabled: _config.telegramAlertsEnabled,
+                                        autoCalculatePivot: _config.autoCalculatePivot,
+                                      );
+                                    });
+                                    _socketService.updateRemoteConfig({'chartRange': r, 'barSpacing': dynamicSpacing});
+                                  },
+                                  child: Container(
+                                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                                    padding: const EdgeInsets.symmetric(vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF0E1626),
+                                      borderRadius: BorderRadius.circular(5),
+                                      border: Border.all(color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B)),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      r,
+                                      style: TextStyle(
+                                        color: isSel ? Colors.black : Colors.white60,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+
+                    // Bar Spacing Pill
+                    Expanded(
+                      flex: 2,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.zoom_in, color: Color(0xFFF59E0B), size: 11),
+                              SizedBox(width: 4),
+                              Text('SPACING:', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w900, fontSize: 9, letterSpacing: 0.5)),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0E1626),
+                              borderRadius: BorderRadius.circular(5),
+                              border: Border.all(color: const Color(0xFF1E293B)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text('${_config.barSpacing}px', style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 9, fontFamily: 'monospace')),
+                                const Text('Zoom', style: TextStyle(color: Colors.white38, fontSize: 8)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
