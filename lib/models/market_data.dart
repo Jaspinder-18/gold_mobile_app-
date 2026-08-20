@@ -56,10 +56,10 @@ class PivotConfig {
   final bool autoCalculatePivot;
 
   PivotConfig({
-    this.r3 = 4473.76,
-    this.r2 = 4432.84,
-    this.s2 = 4300.45,
-    this.s3 = 4259.54,
+    this.r3 = 4657.02,
+    this.r2 = 4580.75,
+    this.s2 = 4333.97,
+    this.s3 = 4257.70,
     this.tolerance = 0.20,
     this.retriggerDistance = 1.00,
     this.chartTimeframe = '15',
