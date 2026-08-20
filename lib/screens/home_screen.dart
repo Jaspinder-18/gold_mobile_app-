@@ -24,6 +24,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   PivotConfig _config = PivotConfig();
   List<AlertEvent> _alerts = [];
   bool _isConnected = false;
+  double _previousPrice = 0.0;
+  String _tickDirection = 'UP';
 
   final List<String> _timeframes = ['1M', '3M', '5M', '15M', '30M', '1H', '4H', '1D'];
 
@@ -38,9 +40,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _config = _socketService.currentConfig;
     _alerts = _socketService.recentAlerts;
     _isConnected = _socketService.isConnected;
+    if (_tick != null) {
+      _previousPrice = _tick!.price;
+      _tickDirection = _tick!.change >= 0 ? 'UP' : 'DOWN';
+    }
 
     _socketService.onMarketTick = (tick) {
-      if (mounted) setState(() => _tick = tick);
+      if (mounted) {
+        setState(() {
+          if (_previousPrice > 0) {
+            if (tick.price > _previousPrice) {
+              _tickDirection = 'UP';
+            } else if (tick.price < _previousPrice) {
+              _tickDirection = 'DOWN';
+            }
+          } else {
+            _tickDirection = tick.change >= 0 ? 'UP' : 'DOWN';
+          }
+          _previousPrice = tick.price;
+          _tick = tick;
+        });
+      }
     };
 
     _socketService.onConfigUpdate = (config) {
@@ -330,22 +350,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Widget _buildWebStyleSpotPriceCard(double price) {
     final change = _tick?.change ?? -40.23;
     final changePercent = _tick?.changePercent ?? -0.89;
-    final isPos = change >= 0;
+    final isDayPos = change >= 0;
+    final isTickUp = _tickDirection == 'UP';
     final bid = _tick?.bid ?? (price - 0.25);
     final ask = _tick?.ask ?? (price + 0.25);
     final spread = (ask - bid).abs();
     final timeStr = DateFormat('HH:mm:ss').format(DateTime.now());
+
+    final tickColor = isTickUp ? const Color(0xFF10B981) : const Color(0xFFEF4444);
+    final dayColor = isDayPos ? const Color(0xFF10B981) : const Color(0xFFEF4444);
 
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFF0A0E17),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1E293B)),
+        border: Border.all(
+          color: isTickUp ? const Color(0xFF059669).withValues(alpha: 0.5) : const Color(0xFFDC2626).withValues(alpha: 0.5),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.6),
-            blurRadius: 10,
+            color: isTickUp ? const Color(0xFF10B981).withValues(alpha: 0.12) : const Color(0xFFEF4444).withValues(alpha: 0.12),
+            blurRadius: 16,
             offset: const Offset(0, 4),
           ),
         ],
@@ -355,15 +382,38 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         children: [
           // Title
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'GOLD / USD',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.5),
+              Row(
+                children: [
+                  const Text(
+                    'GOLD / USD',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.5),
+                  ),
+                  const SizedBox(width: 6),
+                  const Text(
+                    '(XAUUSD)',
+                    style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ],
               ),
-              const SizedBox(width: 6),
-              const Text(
-                '(XAUUSD)',
-                style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isTickUp ? const Color(0xFF064E3B).withValues(alpha: 0.6) : const Color(0xFF450A0A).withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: tickColor.withValues(alpha: 0.5)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(isTickUp ? Icons.arrow_drop_up : Icons.arrow_drop_down, color: tickColor, size: 16),
+                    Text(
+                      isTickUp ? 'TICK UP' : 'TICK DOWN',
+                      style: TextStyle(color: tickColor, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -382,7 +432,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   child: Text(
                     '\$${NumberFormat('#,##0.00').format(price)}',
                     style: TextStyle(
-                      color: isPos ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                      color: tickColor,
                       fontWeight: FontWeight.w900,
                       fontSize: 28,
                       fontFamily: 'monospace',
@@ -396,35 +446,35 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3.5),
                     decoration: BoxDecoration(
-                      color: isPos ? const Color(0xFF064E3B).withValues(alpha: 0.5) : const Color(0xFF450A0A).withValues(alpha: 0.6),
+                      color: isTickUp ? const Color(0xFF064E3B).withValues(alpha: 0.7) : const Color(0xFF450A0A).withValues(alpha: 0.7),
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: isPos ? const Color(0xFF059669).withValues(alpha: 0.6) : const Color(0xFF991B1B).withValues(alpha: 0.8)),
+                      border: Border.all(color: tickColor.withValues(alpha: 0.7)),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(isPos ? Icons.arrow_drop_up : Icons.arrow_drop_down, color: isPos ? const Color(0xFF34D399) : const Color(0xFFF87171), size: 14),
+                        Icon(isTickUp ? Icons.arrow_drop_up : Icons.arrow_drop_down, color: tickColor, size: 14),
                         Text(
-                          isPos ? 'UP' : 'DOWN',
-                          style: TextStyle(color: isPos ? const Color(0xFF34D399) : const Color(0xFFF87171), fontSize: 9, fontWeight: FontWeight.w900),
+                          isTickUp ? 'UP' : 'DOWN',
+                          style: TextStyle(color: tickColor, fontSize: 10, fontWeight: FontWeight.w900),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(width: 5),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3.5),
                     decoration: BoxDecoration(
-                      color: isPos ? const Color(0xFF064E3B).withValues(alpha: 0.6) : const Color(0xFF450A0A).withValues(alpha: 0.6),
+                      color: isDayPos ? const Color(0xFF064E3B).withValues(alpha: 0.7) : const Color(0xFF450A0A).withValues(alpha: 0.7),
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: isPos ? const Color(0xFF10B981).withValues(alpha: 0.7) : const Color(0xFFEF4444).withValues(alpha: 0.7)),
+                      border: Border.all(color: dayColor.withValues(alpha: 0.7)),
                     ),
                     child: Text(
-                      '${isPos ? '↗ +' : '↘ '}${change.toStringAsFixed(2)} (${changePercent.toStringAsFixed(2)}%)',
+                      '${isDayPos ? '↗ +' : '↘ '}${change.toStringAsFixed(2)} (${changePercent.toStringAsFixed(2)}%)',
                       style: TextStyle(
-                        color: isPos ? const Color(0xFF34D399) : const Color(0xFFF87171),
+                        color: dayColor,
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                         fontFamily: 'monospace',
