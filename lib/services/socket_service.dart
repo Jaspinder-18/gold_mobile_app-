@@ -150,6 +150,35 @@ class SocketService {
         }
       });
 
+      _socket?.on('pivotUpdated', (data) {
+        if (data != null) {
+          final map = Map<String, dynamic>.from(data);
+          activePivotState = PivotStateModel.fromJson(map);
+          currentConfig = PivotConfig(
+            r3: activePivotState!.r3,
+            r2: activePivotState!.r2,
+            s2: activePivotState!.s2,
+            s3: activePivotState!.s3,
+            tolerance: currentConfig.tolerance,
+            retriggerDistance: currentConfig.retriggerDistance,
+            chartTimeframe: currentConfig.chartTimeframe,
+            chartRange: currentConfig.chartRange,
+            barSpacing: currentConfig.barSpacing,
+            telegramAlertsEnabled: currentConfig.telegramAlertsEnabled,
+            autoCalculatePivot: currentConfig.autoCalculatePivot,
+          );
+          // Reset level alert states to READY for the new period
+          levelStates['R3'] = 'READY';
+          levelStates['R2'] = 'READY';
+          levelStates['S2'] = 'READY';
+          levelStates['S3'] = 'READY';
+
+          onConfigUpdate?.call(currentConfig);
+          onLevelStatesUpdate?.call(levelStates);
+          onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
+        }
+      });
+
       _socket?.on('alert_triggered', (data) async {
         if (data != null) {
           final map = Map<String, dynamic>.from(data);
