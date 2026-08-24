@@ -179,39 +179,52 @@ class SocketService {
         }
       });
 
-      _socket?.on('alert_triggered', (data) async {
+      void handleIncomingAlert(dynamic data) async {
         if (data != null) {
-          final map = Map<String, dynamic>.from(data);
-          final event = AlertEvent.fromJson(map);
+          try {
+            final map = Map<String, dynamic>.from(data);
+            final eventMap = map['event'] != null && map['event'] is Map
+                ? Map<String, dynamic>.from(map['event'])
+                : map;
+            final event = AlertEvent.fromJson(eventMap);
 
-          // Update level state color
-          if (map['alertStates'] != null && map['alertStates'] is Map) {
-            final states = Map<String, dynamic>.from(map['alertStates']);
-            states.forEach((k, v) {
-              if (v is Map && v['status'] != null) {
-                levelStates[k] = v['status'].toString();
-              }
-            });
-          } else {
-            levelStates[event.level] = 'TRIGGERED';
+            // Update level state color
+            if (map['alertStates'] != null && map['alertStates'] is Map) {
+              final states = Map<String, dynamic>.from(map['alertStates']);
+              states.forEach((k, v) {
+                if (v is Map && v['status'] != null) {
+                  levelStates[k] = v['status'].toString();
+                } else if (v != null) {
+                  levelStates[k] = v.toString();
+                }
+              });
+            } else {
+              levelStates[event.level] = 'TRIGGERED';
+            }
+            onLevelStatesUpdate?.call(levelStates);
+
+            // Update alerts list (strict 6 items)
+            recentAlerts.removeWhere((a) => a.id == event.id);
+            recentAlerts.insert(0, event);
+            if (recentAlerts.length > 6) {
+              recentAlerts = recentAlerts.sublist(0, 6);
+            }
+            onAlertsUpdate?.call(recentAlerts);
+            onAlertTriggered?.call(event);
+
+            // LOUD ALARM CLOCK / REMINDER ALERT SOUND
+            await AudioService().playAlertSound();
+
+            // PUSH NOTIFICATION WITH DIRECT CLICK TO SCREENSHOT
+            await NotificationService().showAlertNotification(event);
+          } catch (e) {
+            // Logger
           }
-          onLevelStatesUpdate?.call(levelStates);
-
-          // Update alerts list (strict 6 items)
-          recentAlerts.insert(0, event);
-          if (recentAlerts.length > 6) {
-            recentAlerts = recentAlerts.sublist(0, 6);
-          }
-          onAlertsUpdate?.call(recentAlerts);
-          onAlertTriggered?.call(event);
-
-          // LOUD ALARM CLOCK / REMINDER ALERT SOUND
-          await AudioService().playAlertSound();
-
-          // PUSH NOTIFICATION WITH DIRECT CLICK TO SCREENSHOT
-          await NotificationService().showAlertNotification(event);
         }
-      });
+      }
+
+      _socket?.on('alert_triggered', handleIncomingAlert);
+      _socket?.on('alert:triggered', handleIncomingAlert);
     } catch (e) {
       _isConnected = false;
       onConnectionChange?.call(false);
