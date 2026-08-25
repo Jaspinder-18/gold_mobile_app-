@@ -22,8 +22,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _socketService = SocketService();
 
   late AlertSound _selectedSound;
+  late RingtoneLoopMode _selectedLoopMode;
   late double _volume;
   late bool _soundEnabled;
+  late bool _vibrationEnabled;
   late String _selectedRange;
   late int _barSpacing;
   bool _isSaving = false;
@@ -45,14 +47,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _retriggerController.text = cfg.retriggerDistance.toStringAsFixed(2);
 
     _selectedSound = _audioService.currentSound;
+    _selectedLoopMode = _audioService.loopMode;
     _volume = _audioService.volume;
     _soundEnabled = _audioService.soundEnabled;
+    _vibrationEnabled = _audioService.vibrationEnabled;
     _selectedRange = cfg.chartRange;
     _barSpacing = cfg.barSpacing;
   }
 
   @override
   void dispose() {
+    _audioService.stop();
     _serverUrlController.dispose();
     _r3Controller.dispose();
     _r2Controller.dispose();
@@ -269,7 +274,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 14),
 
           // Section: Alert Sound Selection (Clock / Reminder)
-          _buildSectionHeader('🔔 LOUD ALARM & REMINDER SOUNDS'),
+          _buildSectionHeader('🔔 LOUD ALARM & RINGTONE SETTINGS'),
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -280,11 +285,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 1. Alarm Sound Switch
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   dense: true,
                   title: const Text('Alarm Sound on Level Touch', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                  subtitle: const Text('Play alarm ringtone when R3, R2, S2, S3 are touched', style: TextStyle(color: Colors.white60, fontSize: 10)),
+                  subtitle: const Text('Play loud alarm ringtone when R3, R2, S2, S3 are touched', style: TextStyle(color: Colors.white60, fontSize: 10)),
                   value: _soundEnabled,
                   activeThumbColor: const Color(0xFFF59E0B),
                   onChanged: (val) async {
@@ -292,9 +298,100 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     await _audioService.setSoundEnabled(val);
                   },
                 ),
+
+                // 2. Vibration Switch
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Vibrate on Level Touch', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                  subtitle: const Text('Tactile haptic vibration when price touches target levels', style: TextStyle(color: Colors.white60, fontSize: 10)),
+                  value: _vibrationEnabled,
+                  activeThumbColor: const Color(0xFFF59E0B),
+                  onChanged: (val) async {
+                    setState(() => _vibrationEnabled = val);
+                    await _audioService.setVibrationEnabled(val);
+                  },
+                ),
+
                 const Divider(color: Color(0xFF1E293B)),
-                const SizedBox(height: 4),
-                const Text('Choose Ringtone:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
+                const SizedBox(height: 6),
+
+                // 3. Ringtone Loop Duration Selector (1 min, 5 min, etc.)
+                const Text('Ringtone Loop Duration:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
+                const SizedBox(height: 3),
+                const Text('How long the alarm rings before automatically silencing', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                const SizedBox(height: 8),
+
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: RingtoneLoopMode.values.map((mode) {
+                    final isSel = _selectedLoopMode == mode;
+                    return InkWell(
+                      onTap: () async {
+                        setState(() => _selectedLoopMode = mode);
+                        await _audioService.setLoopMode(mode);
+                      },
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF090D16),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
+                            width: isSel ? 1.5 : 1,
+                          ),
+                        ),
+                        child: Text(
+                          mode.label,
+                          style: TextStyle(
+                            color: isSel ? Colors.black : Colors.white70,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 10,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+
+                const SizedBox(height: 12),
+                const Divider(color: Color(0xFF1E293B)),
+                const SizedBox(height: 6),
+
+                // 4. Choose Ringtone
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Choose Alarm Sound:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
+                    if (_audioService.isPlaying)
+                      InkWell(
+                        onTap: () async {
+                          await _audioService.stop();
+                          setState(() {});
+                        },
+                        borderRadius: BorderRadius.circular(4),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEF4444).withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: const Color(0xFFEF4444)),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.stop, color: Colors.redAccent, size: 12),
+                              SizedBox(width: 2),
+                              Text('Stop Audio', style: TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 6),
 
                 ...AlertSound.values.map((sound) {

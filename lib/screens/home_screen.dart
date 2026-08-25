@@ -257,7 +257,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Gold touched ${event.level} at \$${event.currentPrice.toStringAsFixed(2)}',
+              '${event.displayName.isNotEmpty ? event.displayName : (event.symbol.isNotEmpty ? event.symbol : "Target")} touched ${event.level} at \$${event.currentPrice.toStringAsFixed(2)}',
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
             const SizedBox(height: 10),
