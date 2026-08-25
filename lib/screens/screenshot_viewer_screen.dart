@@ -154,9 +154,9 @@ class ScreenshotViewerScreen extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Gold Spot / U.S. Dollar (XAU/USD)',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      Text(
+                        event.displayName.isNotEmpty ? event.displayName : (event.symbol.isNotEmpty ? event.symbol : 'Multi-Asset Terminal'),
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -180,7 +180,7 @@ class ScreenshotViewerScreen extends StatelessWidget {
                   Text(
                     event.triggerReason.isNotEmpty
                         ? event.triggerReason
-                        : 'Gold touched ${event.level} @ \$${event.currentPrice.toStringAsFixed(2)}',
+                        : '${event.displayName.isNotEmpty ? event.displayName : (event.symbol.isNotEmpty ? event.symbol : "Asset")} touched ${event.level} @ \$${event.currentPrice.toStringAsFixed(2)}',
                     style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 12),
                   ),
                 ],

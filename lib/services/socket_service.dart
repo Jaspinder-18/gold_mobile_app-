@@ -153,6 +153,10 @@ class SocketService {
       _socket?.on('pivotUpdated', (data) {
         if (data != null) {
           final map = Map<String, dynamic>.from(data);
+          final updatedSym = map['symbol']?.toString();
+          if (updatedSym != null && updatedSym.toUpperCase() != activeSymbol.toUpperCase()) {
+            return;
+          }
           activePivotState = PivotStateModel.fromJson(map);
           currentConfig = PivotConfig(
             r3: activePivotState!.r3,
@@ -254,10 +258,14 @@ class SocketService {
 
   Future<bool> updateRemoteConfig(Map<String, dynamic> updates) async {
     try {
+      final payload = {
+        'symbol': activeSymbol,
+        ...updates,
+      };
       final res = await http.put(
         Uri.parse('$_serverUrl/api/config'),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode(updates),
+        body: json.encode(payload),
       ).timeout(const Duration(seconds: 8));
 
       if (res.statusCode == 200) {
@@ -285,7 +293,7 @@ class SocketService {
   Future<void> fetchInitialData() async {
     try {
       // 1. Fetch Config
-      final configRes = await http.get(Uri.parse('$_serverUrl/api/config')).timeout(const Duration(seconds: 5));
+      final configRes = await http.get(Uri.parse('$_serverUrl/api/config?symbol=$activeSymbol')).timeout(const Duration(seconds: 5));
       if (configRes.statusCode == 200) {
         final body = json.decode(configRes.body);
         if (body['data'] != null) {
@@ -329,6 +337,7 @@ class SocketService {
         Uri.parse('$_serverUrl/api/test/capture-screenshot'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
+          'symbol': activeSymbol,
           'level': 'MANUAL',
           'timeframe': timeframe,
           'range': range,

@@ -1,5 +1,6 @@
 class MarketTick {
   final String symbol;
+  final String displayName;
   final double price;
   final double bid;
   final double ask;
@@ -12,6 +13,7 @@ class MarketTick {
 
   MarketTick({
     required this.symbol,
+    this.displayName = 'Gold / USD Spot',
     required this.price,
     required this.bid,
     required this.ask,
@@ -26,7 +28,8 @@ class MarketTick {
   factory MarketTick.fromJson(Map<String, dynamic> json) {
     final p = (json['price'] as num?)?.toDouble() ?? 4356.40;
     return MarketTick(
-      symbol: json['symbol'] ?? 'XAUUSD',
+      symbol: json['symbol']?.toString() ?? json['rawSymbol']?.toString() ?? 'XAUUSD',
+      displayName: json['displayName']?.toString() ?? json['symbol']?.toString() ?? 'Gold / USD',
       price: p,
       bid: (json['bid'] as num?)?.toDouble() ?? (p - 0.25),
       ask: (json['ask'] as num?)?.toDouble() ?? (p + 0.25),
@@ -89,6 +92,7 @@ class PivotConfig {
 class AlertEvent {
   final String id;
   final String symbol;
+  final String displayName;
   final String level;
   final double levelPrice;
   final double currentPrice;
@@ -102,6 +106,7 @@ class AlertEvent {
   AlertEvent({
     required this.id,
     required this.symbol,
+    this.displayName = 'Gold / USD Spot',
     required this.level,
     required this.levelPrice,
     required this.currentPrice,
@@ -121,6 +126,7 @@ class AlertEvent {
     return AlertEvent(
       id: (json['_id'] ?? json['id'] ?? 'evt_${DateTime.now().millisecondsSinceEpoch}').toString(),
       symbol: json['symbol']?.toString() ?? 'XAUUSD',
+      displayName: json['displayName']?.toString() ?? json['symbol']?.toString() ?? 'Gold / USD',
       level: json['level']?.toString() ?? 'R2',
       levelPrice: (json['levelPrice'] as num?)?.toDouble() ?? 4432.84,
       currentPrice: (json['currentPrice'] as num?)?.toDouble() ?? 4432.84,

@@ -191,7 +191,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   final sym = searchResults[idx];
                                   final isActive = _socketService.activeSymbol == sym.symbol;
                                   return Card(
-                                    color: isActive ? const Color(0xFFF59E0B).withOpacity(0.15) : const Color(0xFF131D31),
+                                    color: isActive ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF131D31),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
                                       side: BorderSide(color: isActive ? const Color(0xFFF59E0B) : const Color(0xFF1E293B)),
@@ -386,7 +386,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 Container(
                   padding: const EdgeInsets.all(5),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF59E0B).withOpacity(0.2),
+                    color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: const Icon(Icons.search, color: Color(0xFFF59E0B), size: 16),
@@ -544,14 +544,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             children: [
               Row(
                 children: [
-                  const Text(
-                    'GOLD / USD',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.5),
+                  Text(
+                    _socketService.activeSymbolConfig?.displayName ?? _tick?.displayName ?? _tick?.symbol ?? _socketService.activeSymbol,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.5),
                   ),
                   const SizedBox(width: 6),
-                  const Text(
-                    '(XAUUSD)',
-                    style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold),
+                  Text(
+                    '(${_socketService.activeSymbol})',
+                    style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
@@ -1058,8 +1058,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               final distance = (currentPrice - targetPrice).abs();
               final isNear = distance <= _config.tolerance;
               final stateStatus = _socketService.levelStates[name] ?? 'READY';
-              final isCurrentlyTouched = stateStatus == 'TRIGGERED' || isNear;
-              final isPreviouslyTouched = stateStatus == 'PREVIOUSLY_TOUCHED' && !isCurrentlyTouched;
+              final isCompleted = stateStatus == 'COMPLETED';
+              final isCurrentlyTouched = (stateStatus == 'TRIGGERED' || isNear) && !isCompleted;
+              final isPreviouslyTouched = stateStatus == 'PREVIOUSLY_TOUCHED' && !isCurrentlyTouched && !isCompleted;
 
               Color cardBg;
               Color cardBorder;
@@ -1073,7 +1074,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               Color priceColor;
               Color distanceColor;
 
-              if (isCurrentlyTouched) {
+              if (isCompleted) {
+                cardBg = const Color(0xFF581C87).withValues(alpha: 0.25);
+                cardBorder = const Color(0xFFA855F7);
+                badgeBg = const Color(0xFF7E22CE);
+                badgeBorder = const Color(0xFFA855F7);
+                badgeTextColor = Colors.white;
+                statusPillBg = const Color(0xFF3B0764);
+                statusPillBorder = const Color(0xFFA855F7);
+                statusPillTextColor = const Color(0xFFE9D5FF);
+                statusPillText = '🔒 2/2 LOCKED';
+                priceColor = const Color(0xFFE9D5FF);
+                distanceColor = const Color(0xFFE9D5FF);
+              } else if (isCurrentlyTouched) {
                 cardBg = const Color(0xFFEF4444).withValues(alpha: 0.18);
                 cardBorder = const Color(0xFFEF4444);
                 badgeBg = const Color(0xFFDC2626);
@@ -1094,7 +1107,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 statusPillBg = const Color(0xFF1E3A8A).withValues(alpha: 0.5);
                 statusPillBorder = const Color(0xFF3B82F6).withValues(alpha: 0.5);
                 statusPillTextColor = const Color(0xFF93C5FD);
-                statusPillText = 'PREVIOUS';
+                statusPillText = 'PREVIOUS (1/2)';
                 priceColor = const Color(0xFF93C5FD);
                 distanceColor = const Color(0xFF93C5FD);
               } else {

@@ -43,20 +43,21 @@ class NotificationService {
 
   Future<void> showAlertNotification(AlertEvent event) async {
     final isResistance = event.level.startsWith('R');
-    final title = '🚨 GOLD TOUCHED ${event.level} @ \$${event.currentPrice.toStringAsFixed(2)}';
+    final symName = event.displayName.isNotEmpty ? event.displayName : (event.symbol.isNotEmpty ? event.symbol : 'ALERT');
+    final title = '🚨 $symName TOUCHED ${event.level} @ \$${event.currentPrice.toStringAsFixed(2)}';
     final body = 'Target: \$${event.levelPrice.toStringAsFixed(2)} · ${isResistance ? "Resistance" : "Support"} Level · Tap to view full TradingView chart';
 
     final androidDetails = AndroidNotificationDetails(
       'gold_alerts_channel',
-      'Gold Level Alerts',
-      channelDescription: 'Loud alarm clock notifications for Gold level touches',
+      'Multi-Asset Level Alerts',
+      channelDescription: 'Loud alarm clock notifications for multi-asset level touches',
       importance: Importance.max,
       priority: Priority.high,
-      ticker: 'Gold Level Alert',
+      ticker: '$symName Level Alert',
       styleInformation: BigTextStyleInformation(
         body,
         contentTitle: title,
-        summaryText: 'XAU/USD Alert Terminal',
+        summaryText: '$symName Alert Terminal',
       ),
     );
 
