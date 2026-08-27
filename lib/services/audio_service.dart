@@ -65,7 +65,37 @@ class AudioService {
     _volume = prefs.getDouble('alert_volume') ?? 1.0;
     _soundEnabled = prefs.getBool('alert_sound_enabled') ?? true;
     _vibrationEnabled = prefs.getBool('alert_vibration_enabled') ?? true;
+
+    // Configure AudioContext for loud alarm playback even when screen is locked/backgrounded
+    try {
+      await _player.setAudioContext(
+        AudioContext(
+          android: AudioContextAndroid(
+            isSpeakerphoneOn: true,
+            stayAwake: true,
+            contentType: AndroidContentType.sonification,
+            usageType: AndroidUsageType.alarm,
+            audioFocus: AndroidAudioFocus.gainTransientExclusive,
+          ),
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: const {
+              AVAudioSessionOptions.defaultToSpeaker,
+              AVAudioSessionOptions.duckOthers,
+            },
+          ),
+        ),
+      );
+    } catch (_) {}
+
     await _player.setVolume(_volume);
+
+    // Reliable looping fallback: automatically restart sound if loop mode is active
+    _player.onPlayerComplete.listen((_) {
+      if (_isPlaying && _loopMode != RingtoneLoopMode.playOnce) {
+        _player.play(AssetSource('sounds/${_currentSound.fileName}'));
+      }
+    });
   }
 
   Future<void> setSound(AlertSound sound) async {

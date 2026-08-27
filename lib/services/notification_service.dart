@@ -35,10 +35,13 @@ class NotificationService {
       enableVibration: true,
     );
 
-    await _notificationsPlugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(androidChannel);
+    // Request Notification Permissions on Android 13+ (API 33+)
+    final androidImpl = _notificationsPlugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (androidImpl != null) {
+      await androidImpl.requestNotificationsPermission();
+      await androidImpl.createNotificationChannel(androidChannel);
+    }
   }
 
   Future<void> showAlertNotification(AlertEvent event) async {

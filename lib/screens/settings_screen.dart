@@ -28,6 +28,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late bool _vibrationEnabled;
   late String _selectedRange;
   late int _barSpacing;
+  late int _autoCalcIntervalMinutes;
   bool _isSaving = false;
 
   @override
@@ -53,6 +54,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _vibrationEnabled = _audioService.vibrationEnabled;
     _selectedRange = cfg.chartRange;
     _barSpacing = cfg.barSpacing;
+    _autoCalcIntervalMinutes = cfg.autoCalcIntervalMinutes;
   }
 
   @override
@@ -87,6 +89,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'retriggerDistance': retrigger,
         'chartRange': _selectedRange,
         'barSpacing': _barSpacing,
+        'autoCalculatePivot': true,
+        'autoCalcIntervalMinutes': _autoCalcIntervalMinutes,
       });
 
       if (mounted) {
@@ -105,24 +109,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _handleAutoCalc() {
-    final tick = _socketService.currentTick;
-    final price = tick?.price ?? 4481.17;
-    final h = (tick != null && tick.high > price) ? tick.high : (price + 32.0);
-    final l = (tick != null && tick.low < price) ? tick.low : (price - 32.0);
-    final c = price;
-    final range = h - l;
-    final p = (h + l + c) / 3;
+  void _handleAutoCalc() async {
+    setState(() => _isSaving = true);
+    final ok = await _socketService.autoCalculatePivots();
+    setState(() => _isSaving = false);
+    if (ok) {
+      final cfg = _socketService.currentConfig;
+      setState(() {
+        _r3Controller.text = cfg.r3.toStringAsFixed(2);
+        _r2Controller.text = cfg.r2.toStringAsFixed(2);
+        _s2Controller.text = cfg.s2.toStringAsFixed(2);
+        _s3Controller.text = cfg.s3.toStringAsFixed(2);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Color(0xFF10B981),
+            content: Text('✨ Authoritative Pivot Levels auto-calculated & replaced!'),
+          ),
+        );
+      }
+    } else {
+      // Local fallback
+      final tick = _socketService.currentTick;
+      final price = tick?.price ?? 4481.17;
+      final h = (tick != null && tick.high > price) ? tick.high : (price + 32.0);
+      final l = (tick != null && tick.low < price) ? tick.low : (price - 32.0);
+      final c = price;
+      final range = h - l;
+      final p = (h + l + c) / 3;
 
-    setState(() {
-      _r3Controller.text = (p + 1.000 * range).toStringAsFixed(2);
-      _r2Controller.text = (p + 0.618 * range).toStringAsFixed(2);
-      _s2Controller.text = (p - 0.618 * range).toStringAsFixed(2);
-      _s3Controller.text = (p - 1.000 * range).toStringAsFixed(2);
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('✨ Auto-calculated Fibonacci levels from live market.')),
-    );
+      setState(() {
+        _r3Controller.text = (p + 1.000 * range).toStringAsFixed(2);
+        _r2Controller.text = (p + 0.618 * range).toStringAsFixed(2);
+        _s2Controller.text = (p - 0.618 * range).toStringAsFixed(2);
+        _s3Controller.text = (p - 1.000 * range).toStringAsFixed(2);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✨ Calculated Fibonacci levels from live market.')),
+        );
+      }
+    }
   }
 
   @override
@@ -170,7 +198,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const Text('Live Target Prices (\$ USD):', style: TextStyle(color: Colors.white70, fontSize: 12)),
                     TextButton.icon(
                       icon: const Icon(Icons.auto_awesome, color: Color(0xFFF59E0B), size: 14),
-                      label: const Text('Auto-Calc', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
+                      label: const Text('Recalculate Now', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
                       style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2)),
                       onPressed: _handleAutoCalc,
                     ),
@@ -190,6 +218,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Expanded(child: _buildLevelField('S2 Support', _s2Controller, const Color(0xFF10B981))),
                     const SizedBox(width: 8),
                     Expanded(child: _buildLevelField('S3 (Low Support)', _s3Controller, const Color(0xFF14B8A6))),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                // Auto-Calc Periodic Interval Dropdown
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Auto-Recalculate Interval:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
+                        Text('Recalculate & replace levels in memory every', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                      ],
+                    ),
+                    DropdownButton<int>(
+                      value: _autoCalcIntervalMinutes,
+                      dropdownColor: const Color(0xFF0F172A),
+                      underline: const SizedBox(),
+                      items: const [
+                        DropdownMenuItem(value: 15, child: Text('15 Min', style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 12))),
+                        DropdownMenuItem(value: 30, child: Text('30 Min', style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 12))),
+                        DropdownMenuItem(value: 60, child: Text('60 Min', style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 12))),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) setState(() => _autoCalcIntervalMinutes = v);
+                      },
+                    ),
                   ],
                 ),
                 const SizedBox(height: 10),

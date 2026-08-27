@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
@@ -6,14 +8,21 @@ import '../models/market_data.dart';
 import 'audio_service.dart';
 import 'notification_service.dart';
 
-class SocketService {
+class SocketService with WidgetsBindingObserver {
   static final SocketService _instance = SocketService._internal();
   factory SocketService() => _instance;
-  SocketService._internal();
+  SocketService._internal() {
+    WidgetsBinding.instance.addObserver(this);
+    // 25-second background & network heartbeat check
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+      _checkHealthAndReconnect();
+    });
+  }
 
   io.Socket? _socket;
   String _serverUrl = 'https://gold-server-dbbq.onrender.com';
   bool _isConnected = false;
+  Timer? _heartbeatTimer;
 
   MarketTick? currentTick;
   PivotConfig currentConfig = PivotConfig();
@@ -39,6 +48,20 @@ class SocketService {
 
   bool get isConnected => _isConnected;
   String get serverUrl => _serverUrl;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkHealthAndReconnect();
+      fetchInitialData();
+    }
+  }
+
+  void _checkHealthAndReconnect() {
+    if (_socket == null || !_isConnected || !(_socket!.connected)) {
+      connectSocket();
+    }
+  }
 
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();

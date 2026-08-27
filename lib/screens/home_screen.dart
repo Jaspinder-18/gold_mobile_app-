@@ -435,6 +435,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
         ),
         actions: [
+          if (AudioService().isPlaying)
+            IconButton(
+              icon: const Icon(Icons.volume_off, color: Colors.redAccent, size: 22),
+              tooltip: 'Silence Alarm',
+              onPressed: () async {
+                await AudioService().stop();
+                if (mounted) setState(() {});
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.tune, color: Color(0xFFF59E0B), size: 20),
             tooltip: 'Settings',

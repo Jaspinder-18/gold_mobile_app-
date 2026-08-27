@@ -57,6 +57,7 @@ class PivotConfig {
   final int barSpacing;
   final bool telegramAlertsEnabled;
   final bool autoCalculatePivot;
+  final int autoCalcIntervalMinutes;
 
   PivotConfig({
     this.r3 = 4657.02,
@@ -70,6 +71,7 @@ class PivotConfig {
     this.barSpacing = 22,
     this.telegramAlertsEnabled = true,
     this.autoCalculatePivot = false,
+    this.autoCalcIntervalMinutes = 15,
   });
 
   factory PivotConfig.fromJson(Map<String, dynamic> json) {
@@ -85,6 +87,7 @@ class PivotConfig {
       barSpacing: (json['barSpacing'] as num?)?.toInt() ?? 22,
       telegramAlertsEnabled: json['telegramAlertsEnabled'] ?? true,
       autoCalculatePivot: json['autoCalculatePivot'] ?? false,
+      autoCalcIntervalMinutes: (json['autoCalcIntervalMinutes'] as num?)?.toInt() ?? 15,
     );
   }
 }
