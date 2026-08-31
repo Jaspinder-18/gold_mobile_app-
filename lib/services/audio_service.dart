@@ -138,6 +138,29 @@ class AudioService {
       final soundToPlay = soundOverride ?? _currentSound;
       _stopTimer?.cancel();
       await _player.stop();
+
+      // Re-prime AudioContext for loud alarm playback even when screen is locked/backgrounded
+      try {
+        await _player.setAudioContext(
+          AudioContext(
+            android: AudioContextAndroid(
+              isSpeakerphoneOn: true,
+              stayAwake: true,
+              contentType: AndroidContentType.sonification,
+              usageType: AndroidUsageType.alarm,
+              audioFocus: AndroidAudioFocus.gainTransientExclusive,
+            ),
+            iOS: AudioContextIOS(
+              category: AVAudioSessionCategory.playback,
+              options: const {
+                AVAudioSessionOptions.defaultToSpeaker,
+                AVAudioSessionOptions.duckOthers,
+              },
+            ),
+          ),
+        );
+      } catch (_) {}
+
       await _player.setVolume(_volume);
 
       if (isManualTest || _loopMode == RingtoneLoopMode.playOnce) {
@@ -161,6 +184,7 @@ class AudioService {
       // Audio playback fallback
     }
   }
+
 
   Future<void> testSound(AlertSound sound) async {
     await playAlertSound(soundOverride: sound, isManualTest: true);
