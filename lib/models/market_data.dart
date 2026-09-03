@@ -1,3 +1,33 @@
+double _toDouble(dynamic val, [double fallback = 0.0]) {
+  if (val == null) return fallback;
+  if (val is num) return val.toDouble();
+  if (val is String) {
+    return double.tryParse(val) ?? fallback;
+  }
+  return fallback;
+}
+
+int _toInt(dynamic val, [int fallback = 0]) {
+  if (val == null) return fallback;
+  if (val is num) return val.toInt();
+  if (val is String) {
+    return int.tryParse(val) ?? fallback;
+  }
+  return fallback;
+}
+
+bool _toBool(dynamic val, [bool fallback = false]) {
+  if (val == null) return fallback;
+  if (val is bool) return val;
+  if (val is String) {
+    final lower = val.toLowerCase().trim();
+    if (lower == 'true' || lower == '1' || lower == 'yes') return true;
+    if (lower == 'false' || lower == '0' || lower == 'no') return false;
+  }
+  if (val is num) return val != 0;
+  return fallback;
+}
+
 class MarketTick {
   final String symbol;
   final String displayName;
@@ -26,18 +56,18 @@ class MarketTick {
   });
 
   factory MarketTick.fromJson(Map<String, dynamic> json) {
-    final p = (json['price'] as num?)?.toDouble() ?? 4356.40;
+    final p = _toDouble(json['price'], 4356.40);
     return MarketTick(
       symbol: json['symbol']?.toString() ?? json['rawSymbol']?.toString() ?? 'XAUUSD',
       displayName: json['displayName']?.toString() ?? json['symbol']?.toString() ?? 'Gold / USD',
       price: p,
-      bid: (json['bid'] as num?)?.toDouble() ?? (p - 0.25),
-      ask: (json['ask'] as num?)?.toDouble() ?? (p + 0.25),
-      high: (json['high'] as num?)?.toDouble() ?? (json['high24h'] as num?)?.toDouble() ?? 4370.00,
-      low: (json['low'] as num?)?.toDouble() ?? (json['low24h'] as num?)?.toDouble() ?? 4340.00,
-      open: (json['open'] as num?)?.toDouble() ?? 4350.00,
-      change: (json['change'] as num?)?.toDouble() ?? 0.0,
-      changePercent: (json['changePercent'] as num?)?.toDouble() ?? 0.0,
+      bid: _toDouble(json['bid'], p - 0.25),
+      ask: _toDouble(json['ask'], p + 0.25),
+      high: _toDouble(json['high'] ?? json['high24h'], 4370.00),
+      low: _toDouble(json['low'] ?? json['low24h'], 4340.00),
+      open: _toDouble(json['open'], 4350.00),
+      change: _toDouble(json['change'], 0.0),
+      changePercent: _toDouble(json['changePercent'], 0.0),
       timestamp: json['timestamp'] != null
           ? DateTime.tryParse(json['timestamp'].toString()) ?? DateTime.now()
           : DateTime.now(),
@@ -58,6 +88,8 @@ class PivotConfig {
   final bool telegramAlertsEnabled;
   final bool autoCalculatePivot;
   final int autoCalcIntervalMinutes;
+  final bool customPriceAlertEnabled;
+  final double customPriceAlertTarget;
 
   PivotConfig({
     this.r3 = 4657.02,
@@ -72,22 +104,60 @@ class PivotConfig {
     this.telegramAlertsEnabled = true,
     this.autoCalculatePivot = false,
     this.autoCalcIntervalMinutes = 15,
+    this.customPriceAlertEnabled = false,
+    this.customPriceAlertTarget = 0.0,
   });
 
   factory PivotConfig.fromJson(Map<String, dynamic> json) {
     return PivotConfig(
-      r3: (json['r3'] as num?)?.toDouble() ?? 4657.017,
-      r2: (json['r2'] as num?)?.toDouble() ?? 4580.747,
-      s2: (json['s2'] as num?)?.toDouble() ?? 4333.967,
-      s3: (json['s3'] as num?)?.toDouble() ?? 4257.697,
-      tolerance: (json['tolerance'] as num?)?.toDouble() ?? 0.20,
-      retriggerDistance: (json['retriggerDistance'] as num?)?.toDouble() ?? 1.00,
+      r3: _toDouble(json['r3'], 4657.017),
+      r2: _toDouble(json['r2'], 4580.747),
+      s2: _toDouble(json['s2'], 4333.967),
+      s3: _toDouble(json['s3'], 4257.697),
+      tolerance: _toDouble(json['tolerance'], 0.20),
+      retriggerDistance: _toDouble(json['retriggerDistance'], 1.00),
       chartTimeframe: json['chartTimeframe']?.toString() ?? '15',
       chartRange: json['chartRange']?.toString() ?? '1D',
-      barSpacing: (json['barSpacing'] as num?)?.toInt() ?? 22,
-      telegramAlertsEnabled: json['telegramAlertsEnabled'] ?? true,
-      autoCalculatePivot: json['autoCalculatePivot'] ?? false,
-      autoCalcIntervalMinutes: (json['autoCalcIntervalMinutes'] as num?)?.toInt() ?? 15,
+      barSpacing: _toInt(json['barSpacing'], 22),
+      telegramAlertsEnabled: _toBool(json['telegramAlertsEnabled'], true),
+      autoCalculatePivot: _toBool(json['autoCalculatePivot'], false),
+      autoCalcIntervalMinutes: _toInt(json['autoCalcIntervalMinutes'], 15),
+      customPriceAlertEnabled: _toBool(json['customPriceAlertEnabled'], false),
+      customPriceAlertTarget: _toDouble(json['customPriceAlertTarget'], 0.0),
+    );
+  }
+
+  PivotConfig copyWith({
+    double? r3,
+    double? r2,
+    double? s2,
+    double? s3,
+    double? tolerance,
+    double? retriggerDistance,
+    String? chartTimeframe,
+    String? chartRange,
+    int? barSpacing,
+    bool? telegramAlertsEnabled,
+    bool? autoCalculatePivot,
+    int? autoCalcIntervalMinutes,
+    bool? customPriceAlertEnabled,
+    double? customPriceAlertTarget,
+  }) {
+    return PivotConfig(
+      r3: r3 ?? this.r3,
+      r2: r2 ?? this.r2,
+      s2: s2 ?? this.s2,
+      s3: s3 ?? this.s3,
+      tolerance: tolerance ?? this.tolerance,
+      retriggerDistance: retriggerDistance ?? this.retriggerDistance,
+      chartTimeframe: chartTimeframe ?? this.chartTimeframe,
+      chartRange: chartRange ?? this.chartRange,
+      barSpacing: barSpacing ?? this.barSpacing,
+      telegramAlertsEnabled: telegramAlertsEnabled ?? this.telegramAlertsEnabled,
+      autoCalculatePivot: autoCalculatePivot ?? this.autoCalculatePivot,
+      autoCalcIntervalMinutes: autoCalcIntervalMinutes ?? this.autoCalcIntervalMinutes,
+      customPriceAlertEnabled: customPriceAlertEnabled ?? this.customPriceAlertEnabled,
+      customPriceAlertTarget: customPriceAlertTarget ?? this.customPriceAlertTarget,
     );
   }
 }
@@ -131,9 +201,9 @@ class AlertEvent {
       symbol: json['symbol']?.toString() ?? 'XAUUSD',
       displayName: json['displayName']?.toString() ?? json['symbol']?.toString() ?? 'Gold / USD',
       level: json['level']?.toString() ?? 'R2',
-      levelPrice: (json['levelPrice'] as num?)?.toDouble() ?? 4432.84,
-      currentPrice: (json['currentPrice'] as num?)?.toDouble() ?? 4432.84,
-      tolerance: (json['tolerance'] as num?)?.toDouble() ?? 0.20,
+      levelPrice: _toDouble(json['levelPrice'], 4432.84),
+      currentPrice: _toDouble(json['currentPrice'], 4432.84),
+      tolerance: _toDouble(json['tolerance'], 0.20),
       screenshotPath: json['screenshotPath']?.toString() ?? '',
       triggerReason: json['triggerReason']?.toString() ?? '',
       telegramStatus: json['telegramStatus']?.toString() ?? 'SENT',
@@ -142,7 +212,7 @@ class AlertEvent {
           : (json['createdAt'] != null
               ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
               : DateTime.now()),
-      isTest: json['isTest'] ?? false,
+      isTest: _toBool(json['isTest'], false),
     );
   }
 }
@@ -174,7 +244,7 @@ class SymbolModel {
       exchange: json['exchange']?.toString() ?? 'OANDA',
       provider: json['provider']?.toString() ?? 'TradingView',
       tradingViewTicker: json['tradingViewTicker']?.toString() ?? 'OANDA:XAUUSD',
-      priceDecimals: (json['priceDecimals'] as num?)?.toInt() ?? 2,
+      priceDecimals: _toInt(json['priceDecimals'], 2),
     );
   }
 }
@@ -221,17 +291,17 @@ class PivotStateModel {
       symbol: json['symbol']?.toString() ?? 'XAUUSD',
       pivotType: json['pivotType']?.toString() ?? 'TRADITIONAL',
       pivotTimeframe: json['pivotTimeframe']?.toString() ?? 'DAILY',
-      high: (json['high'] as num?)?.toDouble() ?? 0.0,
-      low: (json['low'] as num?)?.toDouble() ?? 0.0,
-      close: (json['close'] as num?)?.toDouble() ?? 0.0,
-      p: (json['p'] as num?)?.toDouble() ?? 0.0,
-      r1: (json['r1'] as num?)?.toDouble() ?? 0.0,
-      r2: (json['r2'] as num?)?.toDouble() ?? 0.0,
-      r3: (json['r3'] as num?)?.toDouble() ?? 0.0,
-      s1: (json['s1'] as num?)?.toDouble() ?? 0.0,
-      s2: (json['s2'] as num?)?.toDouble() ?? 0.0,
-      s3: (json['s3'] as num?)?.toDouble() ?? 0.0,
-      isValid: json['isValid'] ?? true,
+      high: _toDouble(json['high'], 0.0),
+      low: _toDouble(json['low'], 0.0),
+      close: _toDouble(json['close'], 0.0),
+      p: _toDouble(json['p'], 0.0),
+      r1: _toDouble(json['r1'], 0.0),
+      r2: _toDouble(json['r2'], 0.0),
+      r3: _toDouble(json['r3'], 0.0),
+      s1: _toDouble(json['s1'], 0.0),
+      s2: _toDouble(json['s2'], 0.0),
+      s3: _toDouble(json['s3'], 0.0),
+      isValid: _toBool(json['isValid'], true),
       periodDateStr: json['periodDateStr']?.toString() ?? '',
       nextRolloverAt: json['nextRolloverAt'] != null
           ? DateTime.tryParse(json['nextRolloverAt'].toString())

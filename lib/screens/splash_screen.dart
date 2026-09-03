@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../services/notification_service.dart';
 import '../services/socket_service.dart';
 import 'home_screen.dart';
 
@@ -62,6 +63,10 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
 
     try {
       await SocketService().fetchInitialData();
+    } catch (_) {}
+
+    try {
+      await NotificationService().requestPermissions();
     } catch (_) {}
 
     await Future.delayed(const Duration(milliseconds: 2700));

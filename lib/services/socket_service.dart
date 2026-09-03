@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -23,6 +24,9 @@ class SocketService with WidgetsBindingObserver {
   String _serverUrl = 'https://gold-server-dbbq.onrender.com';
   bool _isConnected = false;
   Timer? _heartbeatTimer;
+
+  // Anti-duplicate alert debounce cache (prevents duplicate sound/notif triggers)
+  final Map<String, int> _recentAlertTimestamps = {};
 
   MarketTick? currentTick;
   PivotConfig currentConfig = PivotConfig();
@@ -82,11 +86,14 @@ class SocketService with WidgetsBindingObserver {
   void connectSocket() {
     try {
       _socket?.dispose();
+      
+      debugPrint('[SocketService] Connecting to $_serverUrl...');
+      
       _socket = io.io(
         _serverUrl,
         io.OptionBuilder()
             .setTransports(['websocket', 'polling'])
-            .enableAutoConnect()
+            .disableAutoConnect()
             .enableReconnection()
             .setReconnectionAttempts(9999)
             .setReconnectionDelay(1000)
@@ -94,20 +101,36 @@ class SocketService with WidgetsBindingObserver {
       );
 
       _socket?.onConnect((_) {
+        debugPrint('[SocketService] ✓ Connected to Socket.IO Server');
         _isConnected = true;
         onConnectionChange?.call(true);
       });
 
       _socket?.onDisconnect((_) {
+        debugPrint('[SocketService] ✕ Disconnected from Socket.IO Server');
         _isConnected = false;
         onConnectionChange?.call(false);
       });
 
+      _socket?.onConnectError((err) {
+        debugPrint('[SocketService] Connection Error: $err');
+        _isConnected = false;
+        onConnectionChange?.call(false);
+      });
+
+      _socket?.onError((err) {
+        debugPrint('[SocketService] Socket Error: $err');
+      });
+
       void handleTick(dynamic data) {
         if (data != null) {
-          final map = Map<String, dynamic>.from(data);
-          currentTick = MarketTick.fromJson(map);
-          onMarketTick?.call(currentTick!);
+          try {
+            final map = Map<String, dynamic>.from(data as Map);
+            currentTick = MarketTick.fromJson(map);
+            onMarketTick?.call(currentTick!);
+          } catch (e) {
+            debugPrint('[SocketService] handleTick error: $e');
+          }
         }
       }
       _socket?.on('market_tick', handleTick);
@@ -115,109 +138,30 @@ class SocketService with WidgetsBindingObserver {
 
       void handleInitial(dynamic data) {
         if (data != null) {
-          final map = Map<String, dynamic>.from(data);
-          if (map['activeSymbol'] != null) {
-            activeSymbol = map['activeSymbol'].toString();
-          }
-          if (map['symbolConfig'] != null) {
-            activeSymbolConfig = SymbolModel.fromJson(Map<String, dynamic>.from(map['symbolConfig']));
-          }
-          if (map['pivotState'] != null) {
-            activePivotState = PivotStateModel.fromJson(Map<String, dynamic>.from(map['pivotState']));
-          }
-          if (map['market'] != null) {
-            currentTick = MarketTick.fromJson(Map<String, dynamic>.from(map['market']));
-            onMarketTick?.call(currentTick!);
-          } else if (map['price'] != null) {
-            currentTick = MarketTick.fromJson(map);
-            onMarketTick?.call(currentTick!);
-          }
-          if (map['config'] != null) {
-            currentConfig = PivotConfig.fromJson(Map<String, dynamic>.from(map['config']));
-            onConfigUpdate?.call(currentConfig);
-          }
-          if (map['alertStates'] != null && map['alertStates'] is Map) {
-            final states = Map<String, dynamic>.from(map['alertStates']);
-            states.forEach((k, v) {
-              if (v is Map && v['status'] != null) {
-                levelStates[k] = v['status'].toString();
-              }
-            });
-            onLevelStatesUpdate?.call(levelStates);
-          }
-          onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
-        }
-      }
-      _socket?.on('initial_state', handleInitial);
-      _socket?.on('initial:state', handleInitial);
-
-      _socket?.on('symbol:active', (data) {
-        if (data != null) {
-          final map = Map<String, dynamic>.from(data);
-          if (map['symbol'] != null) activeSymbol = map['symbol'].toString();
-          if (map['config'] != null) activeSymbolConfig = SymbolModel.fromJson(Map<String, dynamic>.from(map['config']));
-          if (map['pivotState'] != null) activePivotState = PivotStateModel.fromJson(Map<String, dynamic>.from(map['pivotState']));
-          if (map['market'] != null) {
-            currentTick = MarketTick.fromJson(Map<String, dynamic>.from(map['market']));
-            onMarketTick?.call(currentTick!);
-          }
-          onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
-        }
-      });
-
-      _socket?.on('config_updated', (data) {
-        if (data != null) {
-          final map = Map<String, dynamic>.from(data);
-          currentConfig = PivotConfig.fromJson(map);
-          onConfigUpdate?.call(currentConfig);
-        }
-      });
-
-      _socket?.on('pivotUpdated', (data) {
-        if (data != null) {
-          final map = Map<String, dynamic>.from(data);
-          final updatedSym = map['symbol']?.toString();
-          if (updatedSym != null && updatedSym.toUpperCase() != activeSymbol.toUpperCase()) {
-            return;
-          }
-          activePivotState = PivotStateModel.fromJson(map);
-          currentConfig = PivotConfig(
-            r3: activePivotState!.r3,
-            r2: activePivotState!.r2,
-            s2: activePivotState!.s2,
-            s3: activePivotState!.s3,
-            tolerance: currentConfig.tolerance,
-            retriggerDistance: currentConfig.retriggerDistance,
-            chartTimeframe: currentConfig.chartTimeframe,
-            chartRange: currentConfig.chartRange,
-            barSpacing: currentConfig.barSpacing,
-            telegramAlertsEnabled: currentConfig.telegramAlertsEnabled,
-            autoCalculatePivot: currentConfig.autoCalculatePivot,
-          );
-          // Reset level alert states to READY for the new period
-          levelStates['R3'] = 'READY';
-          levelStates['R2'] = 'READY';
-          levelStates['S2'] = 'READY';
-          levelStates['S3'] = 'READY';
-
-          onConfigUpdate?.call(currentConfig);
-          onLevelStatesUpdate?.call(levelStates);
-          onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
-        }
-      });
-
-      void handleIncomingAlert(dynamic data) async {
-        if (data != null) {
           try {
-            final map = Map<String, dynamic>.from(data);
-            final eventMap = map['event'] != null && map['event'] is Map
-                ? Map<String, dynamic>.from(map['event'])
-                : map;
-            final event = AlertEvent.fromJson(eventMap);
-
-            // Update level state color
+            final map = Map<String, dynamic>.from(data as Map);
+            if (map['activeSymbol'] != null) {
+              activeSymbol = map['activeSymbol'].toString();
+            }
+            if (map['symbolConfig'] != null) {
+              activeSymbolConfig = SymbolModel.fromJson(Map<String, dynamic>.from(map['symbolConfig'] as Map));
+            }
+            if (map['pivotState'] != null) {
+              activePivotState = PivotStateModel.fromJson(Map<String, dynamic>.from(map['pivotState'] as Map));
+            }
+            if (map['market'] != null) {
+              currentTick = MarketTick.fromJson(Map<String, dynamic>.from(map['market'] as Map));
+              onMarketTick?.call(currentTick!);
+            } else if (map['price'] != null) {
+              currentTick = MarketTick.fromJson(map);
+              onMarketTick?.call(currentTick!);
+            }
+            if (map['config'] != null) {
+              currentConfig = PivotConfig.fromJson(Map<String, dynamic>.from(map['config'] as Map));
+              onConfigUpdate?.call(currentConfig);
+            }
             if (map['alertStates'] != null && map['alertStates'] is Map) {
-              final states = Map<String, dynamic>.from(map['alertStates']);
+              final states = Map<String, dynamic>.from(map['alertStates'] as Map);
               states.forEach((k, v) {
                 if (v is Map && v['status'] != null) {
                   levelStates[k] = v['status'].toString();
@@ -225,36 +169,270 @@ class SocketService with WidgetsBindingObserver {
                   levelStates[k] = v.toString();
                 }
               });
-            } else {
-              levelStates[event.level] = 'TRIGGERED';
+              onLevelStatesUpdate?.call(levelStates);
             }
-            onLevelStatesUpdate?.call(levelStates);
+            onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
+          } catch (e) {
+            debugPrint('[SocketService] handleInitial error: $e');
+          }
+        }
+      }
+      _socket?.on('initial_state', handleInitial);
+      _socket?.on('initial:state', handleInitial);
 
-            // Update alerts list (strict 6 items)
-            recentAlerts.removeWhere((a) => a.id == event.id);
+      _socket?.on('symbol:active', (data) {
+        if (data != null) {
+          try {
+            final map = Map<String, dynamic>.from(data as Map);
+            if (map['symbol'] != null) activeSymbol = map['symbol'].toString();
+            if (map['config'] != null) activeSymbolConfig = SymbolModel.fromJson(Map<String, dynamic>.from(map['config'] as Map));
+            if (map['pivotState'] != null) activePivotState = PivotStateModel.fromJson(Map<String, dynamic>.from(map['pivotState'] as Map));
+            if (map['market'] != null) {
+              currentTick = MarketTick.fromJson(Map<String, dynamic>.from(map['market'] as Map));
+              onMarketTick?.call(currentTick!);
+            }
+            onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
+          } catch (e) {
+            debugPrint('[SocketService] symbol:active error: $e');
+          }
+        }
+      });
+
+      void handleConfig(dynamic data) {
+        if (data != null) {
+          try {
+            final map = Map<String, dynamic>.from(data as Map);
+            currentConfig = PivotConfig.fromJson(map);
+            onConfigUpdate?.call(currentConfig);
+          } catch (e) {
+            debugPrint('[SocketService] config_updated error: $e');
+          }
+        }
+      }
+      _socket?.on('config_updated', handleConfig);
+      _socket?.on('config:update', handleConfig);
+
+      void handleLevelStates(dynamic data) {
+        if (data != null) {
+          try {
+            final Map<String, dynamic> states = Map<String, dynamic>.from(data as Map);
+            states.forEach((k, v) {
+              if (v is Map && v['status'] != null) {
+                levelStates[k] = v['status'].toString();
+              } else if (v != null) {
+                levelStates[k] = v.toString();
+              }
+            });
+            onLevelStatesUpdate?.call(levelStates);
+          } catch (e) {
+            debugPrint('[SocketService] handleLevelStates error: $e');
+          }
+        }
+      }
+      _socket?.on('alert:states', handleLevelStates);
+      _socket?.on('alert_states', handleLevelStates);
+
+      _socket?.on('pivotUpdated', (data) {
+        if (data != null) {
+          try {
+            final map = Map<String, dynamic>.from(data as Map);
+            final updatedSym = map['symbol']?.toString();
+            if (updatedSym != null && updatedSym.toUpperCase() != activeSymbol.toUpperCase()) {
+              return;
+            }
+            activePivotState = PivotStateModel.fromJson(map);
+            currentConfig = PivotConfig(
+              r3: activePivotState!.r3,
+              r2: activePivotState!.r2,
+              s2: activePivotState!.s2,
+              s3: activePivotState!.s3,
+              tolerance: currentConfig.tolerance,
+              retriggerDistance: currentConfig.retriggerDistance,
+              chartTimeframe: currentConfig.chartTimeframe,
+              chartRange: currentConfig.chartRange,
+              barSpacing: currentConfig.barSpacing,
+              telegramAlertsEnabled: currentConfig.telegramAlertsEnabled,
+              autoCalculatePivot: currentConfig.autoCalculatePivot,
+              autoCalcIntervalMinutes: currentConfig.autoCalcIntervalMinutes,
+              customPriceAlertEnabled: currentConfig.customPriceAlertEnabled,
+              customPriceAlertTarget: currentConfig.customPriceAlertTarget,
+            );
+            levelStates['R3'] = 'READY';
+            levelStates['R2'] = 'READY';
+            levelStates['S2'] = 'READY';
+            levelStates['S3'] = 'READY';
+
+            onConfigUpdate?.call(currentConfig);
+            onLevelStatesUpdate?.call(levelStates);
+            onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
+          } catch (e) {
+            debugPrint('[SocketService] pivotUpdated error: $e');
+          }
+        }
+      });
+
+      void handleIncomingAlert(dynamic data) async {
+        if (data == null) return;
+        try {
+          final Map<String, dynamic> map = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+          final Map<String, dynamic> eventMap = (map['event'] != null && map['event'] is Map)
+              ? Map<String, dynamic>.from(map['event'] as Map)
+              : map;
+
+          if (eventMap.isEmpty) return;
+
+          final event = AlertEvent.fromJson(eventMap);
+          final now = DateTime.now().millisecondsSinceEpoch;
+          final debounceKey = '${event.symbol}_${event.level}';
+          final lastTrigger = _recentAlertTimestamps[debounceKey] ?? 0;
+          final isRecentDuplicate = (now - lastTrigger) < 6000; // 6-second lock for audio/dialog re-trigger
+
+          debugPrint('[SocketService] 🚨 Level Alert Received: ${event.symbol} ${event.level} @ \$${event.currentPrice} (isDuplicate: $isRecentDuplicate, hasScreenshot: ${event.screenshotPath.isNotEmpty})');
+
+          // 1. Update level state indicators if available
+          if (map['alertStates'] != null && map['alertStates'] is Map) {
+            final states = Map<String, dynamic>.from(map['alertStates'] as Map);
+            states.forEach((k, v) {
+              if (v is Map && v['status'] != null) {
+                levelStates[k] = v['status'].toString();
+              } else if (v != null) {
+                levelStates[k] = v.toString();
+              }
+            });
+          } else {
+            levelStates[event.level] = 'TRIGGERED';
+          }
+          onLevelStatesUpdate?.call(levelStates);
+
+          // 2. Update recent alerts list in-place or prepend
+          final existingIdx = recentAlerts.indexWhere(
+            (a) => a.id == event.id || (a.level == event.level && a.symbol == event.symbol && (now - a.timestamp.millisecondsSinceEpoch).abs() < 25000),
+          );
+
+          if (existingIdx >= 0) {
+            // Update existing with finalized screenshot
+            recentAlerts[existingIdx] = event;
+          } else {
             recentAlerts.insert(0, event);
             if (recentAlerts.length > 6) {
               recentAlerts = recentAlerts.sublist(0, 6);
             }
-            onAlertsUpdate?.call(recentAlerts);
+          }
+          onAlertsUpdate?.call(recentAlerts);
+
+          // 3. If this is a fresh new touch trigger (not a duplicate fast-broadcast follow up or screenshot completion)
+          if (!isRecentDuplicate) {
+            _recentAlertTimestamps[debounceKey] = now;
+
+            // Trigger in-app UI dialog
             onAlertTriggered?.call(event);
 
-            // LOUD ALARM CLOCK / REMINDER ALERT SOUND
+            // Play Loud Alarm Clock / Ringtone Sound
             await AudioService().playAlertSound();
 
-            // PUSH NOTIFICATION WITH DIRECT CLICK TO SCREENSHOT
+            // Dispatch System Notification with Direct Tap Navigation
             await NotificationService().showAlertNotification(event);
-          } catch (e) {
-            // Logger
+          } else if (event.screenshotPath.isNotEmpty) {
+            debugPrint('[SocketService] Finalized screenshot captured for ${event.level}: ${event.screenshotPath}');
           }
+        } catch (e, stack) {
+          debugPrint('[SocketService] handleIncomingAlert error: $e\n$stack');
         }
       }
 
-      _socket?.on('alert_triggered', handleIncomingAlert);
+      // Register primary alert event
       _socket?.on('alert:triggered', handleIncomingAlert);
+      _socket?.on('alert_triggered', handleIncomingAlert);
+
+      // Now initiate connection
+      _socket?.connect();
     } catch (e) {
+      debugPrint('[SocketService] connectSocket exception: $e');
       _isConnected = false;
       onConnectionChange?.call(false);
+    }
+  }
+
+  /// Manually trigger a full end-to-end alert test on this device (Sound + Notification + Dialog)
+  Future<void> triggerLocalTestAlert({String level = 'R2', double price = 4580.75}) async {
+    final event = AlertEvent(
+      id: 'local_test_${DateTime.now().millisecondsSinceEpoch}',
+      symbol: activeSymbol,
+      displayName: activeSymbolConfig?.displayName ?? '$activeSymbol Spot',
+      level: level,
+      levelPrice: price,
+      currentPrice: price,
+      tolerance: currentConfig.tolerance,
+      screenshotPath: '',
+      triggerReason: 'Local Test Alert for level $level @ \$${price.toStringAsFixed(2)}',
+      telegramStatus: 'TEST',
+      timestamp: DateTime.now(),
+      isTest: true,
+    );
+
+    levelStates[level] = 'TRIGGERED';
+    onLevelStatesUpdate?.call(levelStates);
+
+    recentAlerts.removeWhere((a) => a.id == event.id);
+    recentAlerts.insert(0, event);
+    if (recentAlerts.length > 6) {
+      recentAlerts = recentAlerts.sublist(0, 6);
+    }
+    onAlertsUpdate?.call(recentAlerts);
+
+    onAlertTriggered?.call(event);
+    await AudioService().playAlertSound();
+    await NotificationService().showAlertNotification(event);
+  }
+
+  /// Trigger a live simulated alert test from backend server (broadcasts to Web & Mobile via WebSocket)
+  Future<bool> triggerRemoteTestAlert({String level = 'R2', double? price}) async {
+    try {
+      final payload = {
+        'level': level,
+        if (price != null) 'price': price,
+      };
+      final res = await http.post(
+        Uri.parse('$_serverUrl/api/test/trigger-alert'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(payload),
+      ).timeout(const Duration(seconds: 10));
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[SocketService] triggerRemoteTestAlert error: $e');
+      return false;
+    }
+  }
+
+  /// Ping server to test HTTP & WebSocket connectivity with latency measurement
+  Future<Map<String, dynamic>> checkServerConnectivity() async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      final res = await http.get(Uri.parse('$_serverUrl/api/market/ticker')).timeout(const Duration(seconds: 6));
+      stopwatch.stop();
+      if (res.statusCode == 200) {
+        return {
+          'success': true,
+          'latencyMs': stopwatch.elapsedMilliseconds,
+          'message': 'Connected (${stopwatch.elapsedMilliseconds}ms)',
+          'isSocketConnected': _isConnected,
+        };
+      } else {
+        return {
+          'success': false,
+          'latencyMs': stopwatch.elapsedMilliseconds,
+          'message': 'Server responded with status ${res.statusCode}',
+          'isSocketConnected': _isConnected,
+        };
+      }
+    } catch (e) {
+      stopwatch.stop();
+      return {
+        'success': false,
+        'latencyMs': stopwatch.elapsedMilliseconds,
+        'message': 'Connection failed: ${e.toString()}',
+        'isSocketConnected': _isConnected,
+      };
     }
   }
 
@@ -274,7 +452,7 @@ class SocketService with WidgetsBindingObserver {
         }
       }
     } catch (e) {
-      // Fallback
+      debugPrint('[SocketService] autoCalculatePivots error: $e');
     }
     return false;
   }
@@ -300,9 +478,70 @@ class SocketService with WidgetsBindingObserver {
         }
       }
     } catch (e) {
-      // Ignore
+      debugPrint('[SocketService] updateRemoteConfig error: $e');
     }
     return false;
+  }
+
+  Future<bool> setCustomPriceAlert({
+    required double targetPrice,
+    required bool enabled,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$_serverUrl/api/alerts/custom'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'symbol': activeSymbol,
+          'targetPrice': targetPrice,
+          'enabled': enabled,
+        }),
+      ).timeout(const Duration(seconds: 8));
+
+      if (res.statusCode == 200) {
+        final body = json.decode(res.body);
+        if (body['data'] != null) {
+          final data = Map<String, dynamic>.from(body['data']);
+          currentConfig = currentConfig.copyWith(
+            customPriceAlertTarget: (data['targetPrice'] as num?)?.toDouble() ?? targetPrice,
+            customPriceAlertEnabled: data['enabled'] ?? enabled,
+          );
+          onConfigUpdate?.call(currentConfig);
+          return true;
+        }
+      }
+    } catch (e) {
+      debugPrint('[SocketService] setCustomPriceAlert error: $e');
+    }
+
+    return await updateRemoteConfig({
+      'customPriceAlertTarget': targetPrice,
+      'customPriceAlertEnabled': enabled,
+    });
+  }
+
+  Future<bool> deleteCustomPriceAlert() async {
+    try {
+      final res = await http.delete(
+        Uri.parse('$_serverUrl/api/alerts/custom/$activeSymbol'),
+      ).timeout(const Duration(seconds: 8));
+
+      if (res.statusCode == 200) {
+        currentConfig = currentConfig.copyWith(
+          customPriceAlertTarget: 0.0,
+          customPriceAlertEnabled: false,
+        );
+        onConfigUpdate?.call(currentConfig);
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[SocketService] deleteCustomPriceAlert error: $e');
+    }
+
+    return await updateRemoteConfig({
+      'customPriceAlertTarget': 0.0,
+      'customPriceAlertEnabled': false,
+    });
   }
 
   void disconnectSocket() {
@@ -315,12 +554,13 @@ class SocketService with WidgetsBindingObserver {
 
   Future<void> fetchInitialData() async {
     try {
-      // 1. Fetch Config
+      // 1. Fetch Config directly from Online Database (Single Source of Truth)
       final configRes = await http.get(Uri.parse('$_serverUrl/api/config?symbol=$activeSymbol')).timeout(const Duration(seconds: 5));
       if (configRes.statusCode == 200) {
         final body = json.decode(configRes.body);
         if (body['data'] != null) {
-          currentConfig = PivotConfig.fromJson(Map<String, dynamic>.from(body['data']));
+          final configMap = Map<String, dynamic>.from(body['data']);
+          currentConfig = PivotConfig.fromJson(configMap);
           onConfigUpdate?.call(currentConfig);
         }
       }
@@ -346,7 +586,7 @@ class SocketService with WidgetsBindingObserver {
         }
       }
     } catch (e) {
-      // Ignore network delays
+      debugPrint('[SocketService] fetchInitialData error: $e');
     }
   }
 
@@ -381,7 +621,7 @@ class SocketService with WidgetsBindingObserver {
         }
       }
     } catch (e) {
-      // Error
+      debugPrint('[SocketService] captureScreenshot error: $e');
     }
     return null;
   }
@@ -395,7 +635,7 @@ class SocketService with WidgetsBindingObserver {
         return true;
       }
     } catch (e) {
-      // Error
+      debugPrint('[SocketService] deleteAlert error: $e');
     }
     return false;
   }
@@ -413,7 +653,7 @@ class SocketService with WidgetsBindingObserver {
         }
       }
     } catch (e) {
-      // Ignore
+      debugPrint('[SocketService] searchSymbols error: $e');
     }
     return [];
   }
@@ -446,7 +686,7 @@ class SocketService with WidgetsBindingObserver {
         }
       }
     } catch (e) {
-      // Ignore
+      debugPrint('[SocketService] switchSymbol error: $e');
     }
     return false;
   }

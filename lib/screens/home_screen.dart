@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/market_data.dart';
 import '../services/socket_service.dart';
 import '../services/audio_service.dart';
+import '../services/notification_service.dart';
 import 'screenshot_viewer_screen.dart';
 import 'settings_screen.dart';
 
@@ -33,6 +35,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     _initListeners();
+    // Ensure notifications permission is requested when UI is visible
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      NotificationService().requestPermissions();
+    });
+  }
+
+  bool _isAlertDialogOpen = false;
+  final TextEditingController _customTargetPriceController = TextEditingController();
+  bool _isSavingCustomAlert = false;
+
+  @override
+  void dispose() {
+    _customTargetPriceController.dispose();
+    super.dispose();
   }
 
   void _initListeners() {
@@ -40,6 +56,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _config = _socketService.currentConfig;
     _alerts = _socketService.recentAlerts;
     _isConnected = _socketService.isConnected;
+    if (_config.customPriceAlertTarget > 0) {
+      _customTargetPriceController.text = _config.customPriceAlertTarget.toStringAsFixed(2);
+    }
     if (_tick != null) {
       _previousPrice = _tick!.price;
       _tickDirection = _tick!.change >= 0 ? 'UP' : 'DOWN';
@@ -64,7 +83,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     };
 
     _socketService.onConfigUpdate = (config) {
-      if (mounted) setState(() => _config = config);
+      if (mounted) {
+        setState(() {
+          _config = config;
+          if (_customTargetPriceController.text.isEmpty && config.customPriceAlertTarget > 0) {
+            _customTargetPriceController.text = config.customPriceAlertTarget.toStringAsFixed(2);
+          }
+        });
+      }
     };
 
     _socketService.onAlertsUpdate = (alerts) {
@@ -86,6 +112,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _socketService.onAlertTriggered = (event) {
       if (mounted) {
         _showIncomingAlertDialog(event);
+      }
+    };
+
+    NotificationService().onNotificationTap = (payload) {
+      AudioService().stop();
+      if (!mounted) return;
+      if (_alerts.isNotEmpty) {
+        final targetAlert = _alerts.firstWhere(
+          (a) => a.screenshotPath == payload || a.id == payload,
+          orElse: () => _alerts.first,
+        );
+        _openScreenshotViewer(targetAlert);
       }
     };
   }
@@ -231,6 +269,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _showIncomingAlertDialog(AlertEvent event) {
+    if (!mounted) return;
+
+    // Safely dismiss any already open alert dialog before displaying the new one
+    if (_isAlertDialogOpen) {
+      try {
+        Navigator.of(context, rootNavigator: true).pop();
+      } catch (_) {}
+      _isAlertDialogOpen = false;
+    }
+
+    _isAlertDialogOpen = true;
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -278,6 +328,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           TextButton(
             child: const Text('DISMISS', style: TextStyle(color: Colors.grey, fontSize: 12)),
             onPressed: () {
+              _isAlertDialogOpen = false;
               AudioService().stop();
               Navigator.pop(ctx);
             },
@@ -287,6 +338,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             label: const Text('VIEW CHART', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12)),
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF59E0B)),
             onPressed: () {
+              _isAlertDialogOpen = false;
               AudioService().stop();
               Navigator.pop(ctx);
               _openScreenshotViewer(event);
@@ -294,7 +346,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
         ],
       ),
-    );
+    ).then((_) {
+      _isAlertDialogOpen = false;
+    });
   }
 
   String _formatImageUrl(String path) {
@@ -502,14 +556,396 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
           const SizedBox(height: 12),
 
-          // 2. ACTIVE PIVOT MONITOR GRID (R3, R2, S2, S3) (MATCHES WEB APP)
+          // 2. CUSTOM TARGET PRICE ALERT (ON / OFF TOGGLE & DYNAMIC PRICE)
+          _buildCustomTargetPriceAlertCard(currentPrice),
+
+          const SizedBox(height: 12),
+
+          // 3. ACTIVE PIVOT MONITOR GRID (R3, R2, S2, S3) (100% PRESERVED)
           _buildWebStyleTargetLevelsCard(currentPrice),
 
           const SizedBox(height: 12),
 
-          // 3. COMPACT CHART SCREENSHOT CARD
+          // 4. COMPACT CHART SCREENSHOT CARD
           _buildCompactScreenshotCard(latestAlert),
         ],
+      ),
+    );
+  }
+
+  Future<void> _handleSaveCustomTargetAlert({bool? newEnabledState}) async {
+    setState(() => _isSavingCustomAlert = true);
+    final targetVal = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? _config.customPriceAlertTarget;
+    final enabled = newEnabledState ?? true;
+
+    final ok = await _socketService.setCustomPriceAlert(
+      targetPrice: targetVal,
+      enabled: enabled,
+    );
+
+    if (mounted) {
+      setState(() => _isSavingCustomAlert = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: ok ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+          content: Text(
+            ok
+                ? (enabled
+                    ? '🎯 Custom Price Alert ARMED at \$${targetVal.toStringAsFixed(2)} & synced to all devices!'
+                    : '⏸ Custom Price Alert PAUSED.')
+                : 'Failed to update custom price alert in online DB.',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleDeleteCustomTargetAlert() async {
+    setState(() => _isSavingCustomAlert = true);
+    final ok = await _socketService.deleteCustomPriceAlert();
+    if (mounted) {
+      _customTargetPriceController.clear();
+      setState(() => _isSavingCustomAlert = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: ok ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+          content: Text(
+            ok ? '🗑️ Custom Price Alert DELETED from Online DB.' : 'Failed to delete custom price alert.',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Widget _buildCustomTargetPriceAlertCard(double currentPrice) {
+    final isEnabled = _config.customPriceAlertEnabled;
+    final targetPrice = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? _config.customPriceAlertTarget;
+    final distance = (currentPrice - targetPrice).abs();
+    final customState = _socketService.levelStates['CUSTOM'] ?? 'READY';
+    final isTouched = customState == 'TRIGGERED' || (isEnabled && targetPrice > 0 && distance <= _config.tolerance);
+    final isAbove = targetPrice > currentPrice;
+    final audio = AudioService();
+
+    // Proximity calculation (0.0 to 1.0)
+    double proximity = 0.0;
+    if (targetPrice > 0) {
+      final range = (currentPrice * 0.02).clamp(1.0, 100.0);
+      proximity = (1.0 - (distance / range)).clamp(0.05, 1.0);
+    }
+
+    Color borderColor;
+    Color bgColor;
+    if (isTouched) {
+      borderColor = const Color(0xFFEF4444);
+      bgColor = const Color(0xFFEF4444).withValues(alpha: 0.16);
+    } else if (isEnabled) {
+      borderColor = const Color(0xFFF59E0B);
+      bgColor = const Color(0xFFF59E0B).withValues(alpha: 0.09);
+    } else {
+      borderColor = const Color(0xFF1E293B);
+      bgColor = const Color(0xFF0F172A);
+    }
+
+    // Dynamic increment values based on asset type
+    final assetType = _socketService.activeSymbolConfig?.assetType ?? 'COMMODITY';
+    List<double> increments;
+    if (assetType == 'CRYPTO') {
+      increments = [50.0, 100.0, 500.0];
+    } else if (assetType == 'FOREX') {
+      increments = [0.0010, 0.0050, 0.0100];
+    } else if (assetType == 'INDEX') {
+      increments = [5.0, 25.0, 50.0];
+    } else {
+      increments = [1.0, 5.0, 10.0];
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: borderColor, width: isEnabled ? 1.5 : 1),
+        boxShadow: isEnabled
+            ? [
+                BoxShadow(
+                  color: isTouched
+                      ? const Color(0xFFEF4444).withValues(alpha: 0.22)
+                      : const Color(0xFFF59E0B).withValues(alpha: 0.14),
+                  blurRadius: 12,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header: Title & Switch
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: isEnabled ? const Color(0xFFF59E0B).withValues(alpha: 0.25) : const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Icon(Icons.my_location, color: isEnabled ? const Color(0xFFF59E0B) : Colors.grey, size: 16),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'CUSTOM TARGET PRICE ALERT',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11, letterSpacing: 0.5),
+                      ),
+                      Text(
+                        isEnabled ? 'Alarm + Push + Screenshot armed on price hit' : 'Alert currently paused / off',
+                        style: TextStyle(color: isEnabled ? const Color(0xFFFBBF24) : Colors.white38, fontSize: 9),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              Transform.scale(
+                scale: 0.85,
+                child: Switch(
+                  value: isEnabled,
+                  activeColor: const Color(0xFFF59E0B),
+                  activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                  inactiveThumbColor: Colors.grey[600],
+                  inactiveTrackColor: const Color(0xFF1E293B),
+                  onChanged: (val) {
+                    _handleSaveCustomTargetAlert(newEnabledState: val);
+                  },
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 10),
+
+          // Price Input and Quick Current Button
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                flex: 5,
+                child: TextField(
+                  controller: _customTargetPriceController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 16, fontWeight: FontWeight.w900),
+                  decoration: InputDecoration(
+                    prefixText: '\$ ',
+                    prefixStyle: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 15),
+                    hintText: '4410.00',
+                    hintStyle: const TextStyle(color: Colors.white24),
+                    filled: true,
+                    fillColor: const Color(0xFF070A12),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFF59E0B))),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 3,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.flash_on, size: 12, color: Colors.black),
+                  label: const Text('CURRENT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 10)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF59E0B),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 11),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () {
+                    _customTargetPriceController.text = currentPrice.toStringAsFixed(2);
+                    setState(() {});
+                  },
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 8),
+
+          // Quick Increment/Decrement Buttons
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                ...increments.map((inc) => Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: _buildQuickAdjPill('+${inc >= 1 ? inc.toStringAsFixed(inc.truncateToDouble() == inc ? 0 : 2) : inc.toStringAsFixed(4)}', inc),
+                )),
+                const SizedBox(width: 4),
+                ...increments.map((inc) => Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: _buildQuickAdjPill('-${inc >= 1 ? inc.toStringAsFixed(inc.truncateToDouble() == inc ? 0 : 2) : inc.toStringAsFixed(4)}', -inc),
+                )),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          // Mini Alarm Sound & Loop Preview Pill
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFF070A12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF1E293B)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.volume_up, color: Color(0xFFF59E0B), size: 13),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${audio.currentSound.title.split('(')[0].trim()} • ${audio.loopMode.label.split('(')[0].trim()}',
+                      style: const TextStyle(color: Colors.white70, fontSize: 9.5, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                InkWell(
+                  onTap: () async {
+                    if (audio.isPlaying) {
+                      await audio.stop();
+                    } else {
+                      await audio.testSound(audio.currentSound);
+                    }
+                    setState(() {});
+                  },
+                  borderRadius: BorderRadius.circular(4),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: audio.isPlaying ? const Color(0xFFEF4444).withValues(alpha: 0.2) : const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: audio.isPlaying ? const Color(0xFFEF4444) : Colors.white24),
+                    ),
+                    child: Text(
+                      audio.isPlaying ? '■ STOP' : '▶ TEST SOUND',
+                      style: TextStyle(
+                        color: audio.isPlaying ? const Color(0xFFEF4444) : const Color(0xFFF59E0B),
+                        fontSize: 8.5,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 8),
+
+          // Live Distance and Save / Arm Button
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF070A12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF1E293B)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        targetPrice > 0
+                            ? (isAbove ? '↗ Target Above (+\$${distance.toStringAsFixed(2)})' : '↘ Target Below (-\$${distance.toStringAsFixed(2)})')
+                            : 'Enter target price above',
+                        style: TextStyle(
+                          color: isTouched
+                              ? const Color(0xFFEF4444)
+                              : (isEnabled ? const Color(0xFFFBBF24) : Colors.white54),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                      if (isEnabled && targetPrice > 0) ...[
+                        const SizedBox(height: 4),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: proximity,
+                            minHeight: 3,
+                            backgroundColor: const Color(0xFF1E293B),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              isTouched ? const Color(0xFFEF4444) : const Color(0xFFF59E0B),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isEnabled ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    minimumSize: Size.zero,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  ),
+                  onPressed: _isSavingCustomAlert ? null : () => _handleSaveCustomTargetAlert(newEnabledState: true),
+                  child: _isSavingCustomAlert
+                      ? const SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                      : Text(
+                          isEnabled ? 'UPDATE & ARM' : 'ARM ALERT',
+                          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 9.5),
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickAdjPill(String label, double delta) {
+    return InkWell(
+      onTap: () {
+        final current = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? (_tick?.price ?? 4400.0);
+        final next = (current + delta).clamp(0.0, 999999.0);
+        _customTargetPriceController.text = next.toStringAsFixed(2);
+        setState(() {});
+      },
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: delta > 0 ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+            fontSize: 9,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'monospace',
+          ),
+        ),
       ),
     );
   }
