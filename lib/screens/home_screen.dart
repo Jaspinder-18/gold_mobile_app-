@@ -20,7 +20,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   final SocketService _socketService = SocketService();
   int _currentTabIndex = 0;
   bool _isCapturing = false;
-  bool _isAutoCalculating = false;
 
   MarketTick? _tick;
   PivotConfig _config = PivotConfig();
@@ -378,45 +377,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  Future<void> _handleAutoCalcFromLive() async {
-    setState(() => _isAutoCalculating = true);
-    try {
-      final success = await _socketService.autoCalculatePivots();
-      if (!success) {
-        final tick = _tick;
-        final price = tick?.price ?? 4481.17;
-        final high = tick?.high ?? (price + 32.0);
-        final low = tick?.low ?? (price - 32.0);
-        final range = high - low;
-        final pivot = (high + low + price) / 3;
-
-        final r3 = double.parse((pivot + 1.000 * range).toStringAsFixed(2));
-        final r2 = double.parse((pivot + 0.618 * range).toStringAsFixed(2));
-        final s2 = double.parse((pivot - 0.618 * range).toStringAsFixed(2));
-        final s3 = double.parse((pivot - 1.000 * range).toStringAsFixed(2));
-
-        await _socketService.updateRemoteConfig({
-          'r3': r3,
-          'r2': r2,
-          's2': s2,
-          's3': s3,
-          'autoCalculatePivot': true,
-        });
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✨ Fibonacci levels synchronized: R3: \$${_config.r3}, R2: \$${_config.r2}, S2: \$${_config.s2}, S3: \$${_config.s3}'),
-            backgroundColor: const Color(0xFF10B981),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isAutoCalculating = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -561,12 +521,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
           const SizedBox(height: 12),
 
-          // 3. ACTIVE PIVOT MONITOR GRID (R3, R2, S2, S3) (100% PRESERVED)
-          _buildWebStyleTargetLevelsCard(currentPrice),
-
-          const SizedBox(height: 12),
-
-          // 4. COMPACT CHART SCREENSHOT CARD
+          // 3. COMPACT CHART SCREENSHOT CARD
           _buildCompactScreenshotCard(latestAlert),
         ],
       ),
@@ -1169,7 +1124,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
               const SizedBox(width: 6),
 
-              // Tile 2: Active Level
+              // Tile 2: Custom Target
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -1178,13 +1133,26 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: const Color(0xFF1E293B)),
                   ),
-                  child: const Column(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Active Level', style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold)),
-                      SizedBox(height: 2),
-                      Text('⚡ MONITORING', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 9, fontWeight: FontWeight.w900)),
-                      Text('Auto-Calculated', style: TextStyle(color: Colors.white38, fontSize: 8)),
+                      const Text('Custom Target', style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 2),
+                      Text(
+                        _config.customPriceAlertTarget > 0
+                            ? '\$${_config.customPriceAlertTarget.toStringAsFixed(2)}'
+                            : 'STANDBY',
+                        style: TextStyle(
+                          color: _config.customPriceAlertEnabled ? const Color(0xFFF59E0B) : Colors.white38,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                      Text(
+                        _config.customPriceAlertEnabled ? 'Armed & Active' : 'Standby',
+                        style: const TextStyle(color: Colors.white38, fontSize: 8),
+                      ),
                     ],
                   ),
                 ),
@@ -1411,268 +1379,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  Widget _buildWebStyleTargetLevelsCard(double currentPrice) {
-    final levels = [
-      {'key': 'r3', 'name': 'R3', 'label': 'Resistance 3', 'price': _config.r3, 'type': 'RESISTANCE'},
-      {'key': 'r2', 'name': 'R2', 'label': 'Resistance 2', 'price': _config.r2, 'type': 'RESISTANCE'},
-      {'key': 's2', 'name': 'S2', 'label': 'Support 2', 'price': _config.s2, 'type': 'SUPPORT'},
-      {'key': 's3', 'name': 'S3', 'label': 'Support 3', 'price': _config.s3, 'type': 'SUPPORT'},
-    ];
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0A0E17),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1E293B)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.6),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header Row with Title & Legend
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.gps_fixed, color: Color(0xFFF59E0B), size: 14),
-                  const SizedBox(width: 6),
-                  const Text(
-                    'TARGET LEVELS (R3, R2, S2, S3)',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11, letterSpacing: 0.6),
-                  ),
-                ],
-              ),
-              InkWell(
-                onTap: _isAutoCalculating ? null : _handleAutoCalcFromLive,
-                borderRadius: BorderRadius.circular(4),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: const Color(0xFFF59E0B)),
-                  ),
-                  child: Text(
-                    _isAutoCalculating ? '...' : 'Auto-Calc',
-                    style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 9, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 6),
-
-          // Legend
-          const Row(
-            children: [
-              _StatusDot(color: Color(0xFFFBBF24), label: 'Ready'),
-              SizedBox(width: 8),
-              _StatusDot(color: Color(0xFFEF4444), label: 'Touched'),
-              SizedBox(width: 8),
-              _StatusDot(color: Color(0xFF3B82F6), label: 'Previous'),
-            ],
-          ),
-
-          const SizedBox(height: 10),
-
-          // 2x2 Grid of Cards (Matching Web App & Eliminating Overflows)
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-              childAspectRatio: 1.48,
-            ),
-            itemCount: levels.length,
-            itemBuilder: (context, index) {
-              final lvl = levels[index];
-              final name = lvl['name'] as String;
-              final label = lvl['label'] as String;
-              final targetPrice = (lvl['price'] as num).toDouble();
-              final distance = (currentPrice - targetPrice).abs();
-              final isNear = distance <= _config.tolerance;
-              final stateStatus = _socketService.levelStates[name] ?? 'READY';
-              final isCompleted = stateStatus == 'COMPLETED';
-              final isCurrentlyTouched = (stateStatus == 'TRIGGERED' || isNear) && !isCompleted;
-              final isPreviouslyTouched = stateStatus == 'PREVIOUSLY_TOUCHED' && !isCurrentlyTouched && !isCompleted;
-
-              Color cardBg;
-              Color cardBorder;
-              Color badgeBg;
-              Color badgeBorder;
-              Color badgeTextColor;
-              Color statusPillBg;
-              Color statusPillBorder;
-              Color statusPillTextColor;
-              String statusPillText;
-              Color priceColor;
-              Color distanceColor;
-
-              if (isCompleted) {
-                cardBg = const Color(0xFF581C87).withValues(alpha: 0.25);
-                cardBorder = const Color(0xFFA855F7);
-                badgeBg = const Color(0xFF7E22CE);
-                badgeBorder = const Color(0xFFA855F7);
-                badgeTextColor = Colors.white;
-                statusPillBg = const Color(0xFF3B0764);
-                statusPillBorder = const Color(0xFFA855F7);
-                statusPillTextColor = const Color(0xFFE9D5FF);
-                statusPillText = '🔒 2/2 LOCKED';
-                priceColor = const Color(0xFFE9D5FF);
-                distanceColor = const Color(0xFFE9D5FF);
-              } else if (isCurrentlyTouched) {
-                cardBg = const Color(0xFFEF4444).withValues(alpha: 0.18);
-                cardBorder = const Color(0xFFEF4444);
-                badgeBg = const Color(0xFFDC2626);
-                badgeBorder = const Color(0xFFEF4444);
-                badgeTextColor = Colors.white;
-                statusPillBg = const Color(0xFFEF4444);
-                statusPillBorder = const Color(0xFFEF4444);
-                statusPillTextColor = Colors.white;
-                statusPillText = '🚨 TOUCHED';
-                priceColor = const Color(0xFFF87171);
-                distanceColor = const Color(0xFFF87171);
-              } else if (isPreviouslyTouched) {
-                cardBg = const Color(0xFF3B82F6).withValues(alpha: 0.15);
-                cardBorder = const Color(0xFF3B82F6);
-                badgeBg = const Color(0xFF2563EB);
-                badgeBorder = const Color(0xFF3B82F6);
-                badgeTextColor = Colors.white;
-                statusPillBg = const Color(0xFF1E3A8A).withValues(alpha: 0.5);
-                statusPillBorder = const Color(0xFF3B82F6).withValues(alpha: 0.5);
-                statusPillTextColor = const Color(0xFF93C5FD);
-                statusPillText = 'PREVIOUS (1/2)';
-                priceColor = const Color(0xFF93C5FD);
-                distanceColor = const Color(0xFF93C5FD);
-              } else {
-                cardBg = const Color(0xFF070A12);
-                cardBorder = const Color(0xFFF59E0B).withValues(alpha: 0.45);
-                badgeBg = const Color(0xFFF59E0B).withValues(alpha: 0.2);
-                badgeBorder = const Color(0xFFF59E0B).withValues(alpha: 0.6);
-                badgeTextColor = const Color(0xFFF59E0B);
-                statusPillBg = const Color(0xFFF59E0B).withValues(alpha: 0.15);
-                statusPillBorder = const Color(0xFFF59E0B).withValues(alpha: 0.4);
-                statusPillTextColor = const Color(0xFFFBBF24);
-                statusPillText = '✓ READY';
-                priceColor = const Color(0xFFFBBF24);
-                distanceColor = const Color(0xFFFBBF24);
-              }
-
-              return Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: cardBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: cardBorder,
-                    width: isCurrentlyTouched ? 2 : 1,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    // Badge Header Row
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                          decoration: BoxDecoration(
-                            color: badgeBg,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: badgeBorder),
-                          ),
-                          child: Text(
-                            name,
-                            style: TextStyle(color: badgeTextColor, fontWeight: FontWeight.w900, fontSize: 10),
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                          decoration: BoxDecoration(
-                            color: statusPillBg,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: statusPillBorder),
-                          ),
-                          child: Text(
-                            statusPillText,
-                            style: TextStyle(
-                              color: statusPillTextColor,
-                              fontSize: 8,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    // Price & Subtitle
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            '\$${NumberFormat('#,##0.00').format(targetPrice)}',
-                            style: TextStyle(
-                              color: priceColor,
-                              fontWeight: FontWeight.w900,
-                              fontSize: 16,
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                        ),
-                        Text(
-                          label,
-                          style: const TextStyle(color: Colors.white38, fontSize: 8.5, fontWeight: FontWeight.w500),
-                        ),
-                      ],
-                    ),
-
-                    // Distance Footer
-                    Container(
-                      padding: const EdgeInsets.only(top: 2),
-                      decoration: const BoxDecoration(
-                        border: Border(top: BorderSide(color: Color(0xFF1E293B))),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Distance:', style: TextStyle(color: Colors.white38, fontSize: 8.5)),
-                          Text(
-                            '\$${distance.toStringAsFixed(2)}',
-                            style: TextStyle(
-                              color: distanceColor,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 9.5,
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildCompactScreenshotCard(AlertEvent? alert) {
     final hasImage = alert != null && alert.screenshotPath.isNotEmpty;
@@ -1934,27 +1640,3 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 }
 
-class _StatusDot extends StatelessWidget {
-  final Color color;
-  final String label;
-
-  const _StatusDot({required this.color, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 6,
-          height: 6,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 3),
-        Text(
-          label,
-          style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.bold),
-        ),
-      ],
-    );
-  }
-}
