@@ -70,8 +70,32 @@ class SocketService with WidgetsBindingObserver {
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
     _serverUrl = prefs.getString('server_url') ?? 'https://gold-server-dbbq.onrender.com';
+    
+    // Load local custom alert cache to prevent any switch flicker on startup
+    final cachedEnabled = prefs.getBool('custom_price_alert_enabled_${activeSymbol.toUpperCase()}');
+    final cachedTarget = prefs.getDouble('custom_price_alert_target_${activeSymbol.toUpperCase()}');
+    if (cachedEnabled != null || cachedTarget != null) {
+      currentConfig = currentConfig.copyWith(
+        customPriceAlertEnabled: cachedEnabled ?? currentConfig.customPriceAlertEnabled,
+        customPriceAlertTarget: cachedTarget ?? currentConfig.customPriceAlertTarget,
+      );
+      if (cachedEnabled == true && (cachedTarget ?? 0) > 0) {
+        levelStates['CUSTOM'] = 'READY';
+      }
+    }
+
     await fetchInitialData();
     connectSocket();
+  }
+
+  Future<void> _persistCustomAlertState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('custom_price_alert_enabled_${activeSymbol.toUpperCase()}', currentConfig.customPriceAlertEnabled);
+      await prefs.setDouble('custom_price_alert_target_${activeSymbol.toUpperCase()}', currentConfig.customPriceAlertTarget);
+    } catch (e) {
+      debugPrint('[SocketService] _persistCustomAlertState error: $e');
+    }
   }
 
   Future<void> updateServerUrl(String newUrl) async {
@@ -203,7 +227,13 @@ class SocketService with WidgetsBindingObserver {
           try {
             final map = Map<String, dynamic>.from(data as Map);
             currentConfig = PivotConfig.fromJson(map);
+            if (map['customPriceAlertStatus'] != null) {
+              levelStates['CUSTOM'] = map['customPriceAlertStatus'].toString() == 'ACTIVE'
+                  ? 'READY'
+                  : map['customPriceAlertStatus'].toString();
+            }
             onConfigUpdate?.call(currentConfig);
+            _persistCustomAlertState();
           } catch (e) {
             debugPrint('[SocketService] config_updated error: $e');
           }
@@ -211,6 +241,56 @@ class SocketService with WidgetsBindingObserver {
       }
       _socket?.on('config_updated', handleConfig);
       _socket?.on('config:update', handleConfig);
+
+      _socket?.on('custom_alert:updated', (data) {
+        if (data != null && data is Map) {
+          try {
+            final map = Map<String, dynamic>.from(data);
+            final sym = map['symbol']?.toString();
+            if (sym != null && sym.toUpperCase() != activeSymbol.toUpperCase()) return;
+            final isEn = map['customPriceAlertEnabled'] ?? map['customAlert']?['enabled'] ?? false;
+            final tPrice = (map['customPriceAlertTarget'] ?? map['customAlert']?['targetPrice'] as num?)?.toDouble() ?? 0.0;
+            final st = map['customPriceAlertStatus']?.toString() ??
+                map['customAlert']?['status']?.toString() ??
+                (isEn == true && tPrice > 0 ? 'ACTIVE' : 'INACTIVE');
+
+            currentConfig = currentConfig.copyWith(
+              customPriceAlertEnabled: isEn == true,
+              customPriceAlertTarget: tPrice,
+              customPriceAlertStatus: st,
+            );
+            levelStates['CUSTOM'] = st == 'ACTIVE' ? 'READY' : st;
+            onConfigUpdate?.call(currentConfig);
+            onLevelStatesUpdate?.call(levelStates);
+            _persistCustomAlertState();
+          } catch (e) {
+            debugPrint('[SocketService] custom_alert:updated error: $e');
+          }
+        }
+      });
+
+      _socket?.on('custom_alert:deleted', (data) {
+        currentConfig = currentConfig.copyWith(
+          customPriceAlertEnabled: false,
+          customPriceAlertTarget: 0.0,
+          customPriceAlertStatus: 'INACTIVE',
+        );
+        levelStates['CUSTOM'] = 'INACTIVE';
+        onConfigUpdate?.call(currentConfig);
+        onLevelStatesUpdate?.call(levelStates);
+        _persistCustomAlertState();
+      });
+
+      _socket?.on('custom_alert:triggered', (data) {
+        currentConfig = currentConfig.copyWith(
+          customPriceAlertEnabled: false,
+          customPriceAlertStatus: 'TRIGGERED',
+        );
+        levelStates['CUSTOM'] = 'TRIGGERED';
+        onConfigUpdate?.call(currentConfig);
+        onLevelStatesUpdate?.call(levelStates);
+        _persistCustomAlertState();
+      });
 
       void handleLevelStates(dynamic data) {
         if (data != null) {
@@ -505,8 +585,12 @@ class SocketService with WidgetsBindingObserver {
           currentConfig = currentConfig.copyWith(
             customPriceAlertTarget: (data['targetPrice'] as num?)?.toDouble() ?? targetPrice,
             customPriceAlertEnabled: data['enabled'] ?? enabled,
+            customPriceAlertStatus: data['status']?.toString() ?? (enabled && targetPrice > 0 ? 'ACTIVE' : 'INACTIVE'),
           );
+          levelStates['CUSTOM'] = currentConfig.customPriceAlertStatus == 'ACTIVE' ? 'READY' : currentConfig.customPriceAlertStatus;
           onConfigUpdate?.call(currentConfig);
+          onLevelStatesUpdate?.call(levelStates);
+          _persistCustomAlertState();
           return true;
         }
       }
@@ -514,10 +598,12 @@ class SocketService with WidgetsBindingObserver {
       debugPrint('[SocketService] setCustomPriceAlert error: $e');
     }
 
-    return await updateRemoteConfig({
+    final ok = await updateRemoteConfig({
       'customPriceAlertTarget': targetPrice,
       'customPriceAlertEnabled': enabled,
     });
+    if (ok) _persistCustomAlertState();
+    return ok;
   }
 
   Future<bool> deleteCustomPriceAlert() async {
@@ -530,18 +616,24 @@ class SocketService with WidgetsBindingObserver {
         currentConfig = currentConfig.copyWith(
           customPriceAlertTarget: 0.0,
           customPriceAlertEnabled: false,
+          customPriceAlertStatus: 'INACTIVE',
         );
+        levelStates['CUSTOM'] = 'INACTIVE';
         onConfigUpdate?.call(currentConfig);
+        onLevelStatesUpdate?.call(levelStates);
+        _persistCustomAlertState();
         return true;
       }
     } catch (e) {
       debugPrint('[SocketService] deleteCustomPriceAlert error: $e');
     }
 
-    return await updateRemoteConfig({
+    final ok = await updateRemoteConfig({
       'customPriceAlertTarget': 0.0,
       'customPriceAlertEnabled': false,
     });
+    if (ok) _persistCustomAlertState();
+    return ok;
   }
 
   void disconnectSocket() {
@@ -561,8 +653,40 @@ class SocketService with WidgetsBindingObserver {
         if (body['data'] != null) {
           final configMap = Map<String, dynamic>.from(body['data']);
           currentConfig = PivotConfig.fromJson(configMap);
+          if (configMap['customPriceAlertStatus'] != null) {
+            levelStates['CUSTOM'] = configMap['customPriceAlertStatus'].toString() == 'ACTIVE'
+                ? 'READY'
+                : configMap['customPriceAlertStatus'].toString();
+          }
           onConfigUpdate?.call(currentConfig);
+          onLevelStatesUpdate?.call(levelStates);
+          _persistCustomAlertState();
         }
+      }
+
+      // 1b. Specifically fetch custom alert status to ensure 100% online database parity
+      try {
+        final customRes = await http.get(Uri.parse('$_serverUrl/api/alerts/custom?symbol=$activeSymbol')).timeout(const Duration(seconds: 4));
+        if (customRes.statusCode == 200) {
+          final body = json.decode(customRes.body);
+          if (body['data'] != null) {
+            final data = Map<String, dynamic>.from(body['data']);
+            final bool isEn = data['enabled'] == true;
+            final double tPrice = (data['targetPrice'] as num?)?.toDouble() ?? 0.0;
+            final String st = data['status']?.toString() ?? (isEn && tPrice > 0 ? 'ACTIVE' : 'INACTIVE');
+            currentConfig = currentConfig.copyWith(
+              customPriceAlertEnabled: isEn,
+              customPriceAlertTarget: tPrice,
+              customPriceAlertStatus: st,
+            );
+            levelStates['CUSTOM'] = st == 'ACTIVE' ? 'READY' : st;
+            onConfigUpdate?.call(currentConfig);
+            onLevelStatesUpdate?.call(levelStates);
+            _persistCustomAlertState();
+          }
+        }
+      } catch (e) {
+        debugPrint('[SocketService] fetch custom alert error: $e');
       }
 
       // 2. Fetch Latest 6 Alerts

@@ -85,8 +85,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (mounted) {
         setState(() {
           _config = config;
-          if (_customTargetPriceController.text.isEmpty && config.customPriceAlertTarget > 0) {
+          if (config.customPriceAlertTarget > 0) {
             _customTargetPriceController.text = config.customPriceAlertTarget.toStringAsFixed(2);
+          } else if (!config.customPriceAlertEnabled && config.customPriceAlertTarget == 0) {
+            _customTargetPriceController.clear();
           }
         });
       }
@@ -662,8 +664,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11, letterSpacing: 0.5),
                       ),
                       Text(
-                        isEnabled ? 'Alarm + Push + Screenshot armed on price hit' : 'Alert currently paused / off',
-                        style: TextStyle(color: isEnabled ? const Color(0xFFFBBF24) : Colors.white38, fontSize: 9),
+                        isTouched
+                            ? '🎯 TARGET HIT: Alert triggered (Switch OFF)'
+                            : (isEnabled ? 'Alarm + Push + Screenshot armed on price hit' : 'Alert currently paused / off'),
+                        style: TextStyle(
+                          color: isTouched
+                              ? const Color(0xFFEF4444)
+                              : (isEnabled ? const Color(0xFFFBBF24) : Colors.white38),
+                          fontSize: 9,
+                          fontWeight: isTouched ? FontWeight.bold : FontWeight.normal,
+                        ),
                       ),
                     ],
                   ),

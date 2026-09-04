@@ -90,6 +90,7 @@ class PivotConfig {
   final int autoCalcIntervalMinutes;
   final bool customPriceAlertEnabled;
   final double customPriceAlertTarget;
+  final String customPriceAlertStatus;
 
   PivotConfig({
     this.r3 = 4657.02,
@@ -106,6 +107,7 @@ class PivotConfig {
     this.autoCalcIntervalMinutes = 15,
     this.customPriceAlertEnabled = false,
     this.customPriceAlertTarget = 0.0,
+    this.customPriceAlertStatus = 'INACTIVE',
   });
 
   factory PivotConfig.fromJson(Map<String, dynamic> json) {
@@ -124,6 +126,8 @@ class PivotConfig {
       autoCalcIntervalMinutes: _toInt(json['autoCalcIntervalMinutes'], 15),
       customPriceAlertEnabled: _toBool(json['customPriceAlertEnabled'], false),
       customPriceAlertTarget: _toDouble(json['customPriceAlertTarget'], 0.0),
+      customPriceAlertStatus: json['customPriceAlertStatus']?.toString() ??
+          (_toBool(json['customPriceAlertEnabled'], false) && _toDouble(json['customPriceAlertTarget'], 0.0) > 0 ? 'ACTIVE' : 'INACTIVE'),
     );
   }
 
@@ -142,6 +146,7 @@ class PivotConfig {
     int? autoCalcIntervalMinutes,
     bool? customPriceAlertEnabled,
     double? customPriceAlertTarget,
+    String? customPriceAlertStatus,
   }) {
     return PivotConfig(
       r3: r3 ?? this.r3,
@@ -158,6 +163,7 @@ class PivotConfig {
       autoCalcIntervalMinutes: autoCalcIntervalMinutes ?? this.autoCalcIntervalMinutes,
       customPriceAlertEnabled: customPriceAlertEnabled ?? this.customPriceAlertEnabled,
       customPriceAlertTarget: customPriceAlertTarget ?? this.customPriceAlertTarget,
+      customPriceAlertStatus: customPriceAlertStatus ?? this.customPriceAlertStatus,
     );
   }
 }
