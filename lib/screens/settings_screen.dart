@@ -202,25 +202,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _handleTestAlarmAndNotification() async {
-    await _socketService.triggerLocalTestAlert(level: 'R2', price: _socketService.currentTick?.price ?? 4580.75);
+    final targetPrice = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? (_socketService.currentConfig.customPriceAlertTarget > 0 ? _socketService.currentConfig.customPriceAlertTarget : (_socketService.currentTick?.price ?? 3450.50));
+    await _socketService.triggerLocalTestAlert(level: 'CUSTOM', price: targetPrice);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Color(0xFF10B981),
-          content: Text('🚨 Test Alert Fired: Sound & System Notification Dispatched!'),
+        SnackBar(
+          backgroundColor: const Color(0xFF10B981),
+          content: Text('🚨 Custom Alert Test Fired @ \$${targetPrice.toStringAsFixed(2)}: Sound & Notification Dispatched!'),
         ),
       );
     }
   }
 
   Future<void> _handleTestServerAlert() async {
-    final success = await _socketService.triggerRemoteTestAlert(level: 'R2');
+    final targetPrice = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? (_socketService.currentConfig.customPriceAlertTarget > 0 ? _socketService.currentConfig.customPriceAlertTarget : (_socketService.currentTick?.price ?? 3450.50));
+    final success = await _socketService.triggerRemoteTestAlert(level: 'CUSTOM', price: targetPrice);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFEF4444),
           content: Text(
-            success ? '🚨 Server Alert Triggered! Incoming WebSocket Alert Dispatched.' : 'Failed to trigger server alert. Check server connection.',
+            success ? '🚨 Server Custom Alert Triggered @ \$${targetPrice.toStringAsFixed(2)}! Incoming Alert Dispatched to all devices.' : 'Failed to trigger server alert. Check server connection.',
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
         ),

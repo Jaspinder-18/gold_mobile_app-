@@ -281,6 +281,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
 
     _isAlertDialogOpen = true;
+    final isCustom = event.level.toUpperCase() == 'CUSTOM';
+    final symName = event.displayName.isNotEmpty
+        ? event.displayName
+        : (event.symbol.isNotEmpty ? event.symbol : 'Target');
 
     showDialog(
       context: context,
@@ -297,7 +301,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                '🚨 ${event.level} TOUCHED!',
+                isCustom ? '🚨 CUSTOM TARGET HIT!' : '🚨 ${event.level} TOUCHED!',
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16),
               ),
             ),
@@ -307,8 +311,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF4444).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
+              ),
+              child: Text(
+                isCustom
+                    ? '🎯 TARGET: \$${event.levelPrice.toStringAsFixed(2)} · LIVE: \$${event.currentPrice.toStringAsFixed(2)}'
+                    : '🎯 ${event.level} TARGET: \$${event.levelPrice.toStringAsFixed(2)} · LIVE: \$${event.currentPrice.toStringAsFixed(2)}',
+                style: const TextStyle(color: Color(0xFFFCA5A5), fontWeight: FontWeight.bold, fontSize: 11, fontFamily: 'monospace'),
+              ),
+            ),
+            const SizedBox(height: 8),
             Text(
-              '${event.displayName.isNotEmpty ? event.displayName : (event.symbol.isNotEmpty ? event.symbol : "Target")} touched ${event.level} at \$${event.currentPrice.toStringAsFixed(2)}',
+              isCustom
+                  ? '$symName reached custom set price of \$${event.levelPrice.toStringAsFixed(2)} at \$${event.currentPrice.toStringAsFixed(2)}'
+                  : '$symName touched ${event.level} at \$${event.currentPrice.toStringAsFixed(2)}',
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
             const SizedBox(height: 10),

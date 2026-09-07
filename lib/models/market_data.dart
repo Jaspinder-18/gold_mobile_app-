@@ -199,16 +199,20 @@ class AlertEvent {
 
   factory AlertEvent.fromJson(Map<String, dynamic> rawJson) {
     final json = (rawJson['event'] != null && rawJson['event'] is Map)
-        ? Map<String, dynamic>.from(rawJson['event'])
+        ? Map<String, dynamic>.from(rawJson['event'] as Map)
         : rawJson;
 
+    final rawLevel = json['level']?.toString() ?? 'CUSTOM';
+    final targetPrice = _toDouble(json['levelPrice'] ?? json['customPrice'] ?? json['targetPrice'], 0.0);
+    final curPrice = _toDouble(json['currentPrice'] ?? json['triggerPrice'] ?? json['price'], targetPrice);
+
     return AlertEvent(
-      id: (json['_id'] ?? json['id'] ?? 'evt_${DateTime.now().millisecondsSinceEpoch}').toString(),
+      id: (json['_id'] ?? json['id'] ?? json['eventId'] ?? 'evt_${DateTime.now().millisecondsSinceEpoch}').toString(),
       symbol: json['symbol']?.toString() ?? 'XAUUSD',
       displayName: json['displayName']?.toString() ?? json['symbol']?.toString() ?? 'Gold / USD',
-      level: json['level']?.toString() ?? 'R2',
-      levelPrice: _toDouble(json['levelPrice'], 4432.84),
-      currentPrice: _toDouble(json['currentPrice'], 4432.84),
+      level: rawLevel,
+      levelPrice: targetPrice > 0 ? targetPrice : curPrice,
+      currentPrice: curPrice > 0 ? curPrice : targetPrice,
       tolerance: _toDouble(json['tolerance'], 0.20),
       screenshotPath: json['screenshotPath']?.toString() ?? '',
       triggerReason: json['triggerReason']?.toString() ?? '',
@@ -217,7 +221,9 @@ class AlertEvent {
           ? DateTime.tryParse(json['timestamp'].toString()) ?? DateTime.now()
           : (json['createdAt'] != null
               ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
-              : DateTime.now()),
+              : (json['triggeredAt'] != null
+                  ? DateTime.tryParse(json['triggeredAt'].toString()) ?? DateTime.now()
+                  : DateTime.now())),
       isTest: _toBool(json['isTest'], false),
     );
   }
