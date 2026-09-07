@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,9 +32,9 @@ class SocketService with WidgetsBindingObserver {
   factory SocketService() => _instance;
   SocketService._internal() {
     WidgetsBinding.instance.addObserver(this);
-    // 25-second background & network heartbeat check
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
-      _checkHealthAndReconnect();
+    // Heartbeat & continuous sync timer (every 4 seconds)
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      _checkHealthAndSync();
     });
   }
 
@@ -43,8 +42,9 @@ class SocketService with WidgetsBindingObserver {
   String _serverUrl = 'https://gold-server-dbbq.onrender.com';
   bool _isConnected = false;
   Timer? _heartbeatTimer;
+  double? _lastEvaluatedPrice;
 
-  // Anti-duplicate alert debounce cache (prevents duplicate sound/notif triggers)
+  // Anti-duplicate alert debounce cache: debounceKey -> timestamp
   final Map<String, int> _recentAlertTimestamps = {};
 
   MarketTick? currentTick;
@@ -76,22 +76,58 @@ class SocketService with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _checkHealthAndReconnect();
+      _checkHealthAndSync();
       fetchInitialData();
     }
   }
 
-  void _checkHealthAndReconnect() {
+  void _checkHealthAndSync() {
     if (_socket == null || !_isConnected || !(_socket!.connected)) {
       connectSocket();
     }
+    _syncLatestAlertsFromBackend();
+  }
+
+  /// High-reliability background sync to catch any trigger even during socket reconnects
+  Future<void> _syncLatestAlertsFromBackend() async {
+    try {
+      final alertsRes = await http.get(Uri.parse('$_serverUrl/api/alerts?limit=3')).timeout(const Duration(seconds: 4));
+      if (alertsRes.statusCode == 200) {
+        final body = json.decode(alertsRes.body);
+        if (body['data'] != null && body['data'] is List) {
+          final list = (body['data'] as List).map((i) => AlertEvent.fromJson(Map<String, dynamic>.from(i))).toList();
+          if (list.isNotEmpty) {
+            final newest = list.first;
+            final now = DateTime.now().millisecondsSinceEpoch;
+            final alertTime = newest.timestamp.millisecondsSinceEpoch;
+            final ageMs = (now - alertTime).abs();
+
+            // If alert triggered within last 45 seconds and has not been alarmed on this device
+            final debounceKey = '${newest.symbol}_${newest.level}';
+            final lastTrigger = _recentAlertTimestamps[debounceKey] ?? 0;
+            if (ageMs < 45000 && (now - lastTrigger) > 15000) {
+              _recentAlertTimestamps[debounceKey] = now;
+              _recentAlertTimestamps[newest.id] = now;
+
+              // Dispatch loud alarm sound, notification & dialog
+              onAlertTriggered?.call(newest);
+              try { AudioService().playAlertSound(); } catch (_) {}
+              try { NotificationService().showAlertNotification(newest); } catch (_) {}
+            }
+
+            recentAlerts = list.take(6).toList();
+            onAlertsUpdate?.call(recentAlerts);
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
     _serverUrl = prefs.getString('server_url') ?? 'https://gold-server-dbbq.onrender.com';
     
-    // Load local custom alert cache to prevent any switch flicker on startup
+    // Load local custom alert cache
     final cachedEnabled = prefs.getBool('custom_price_alert_enabled_${activeSymbol.toUpperCase()}');
     final cachedTarget = prefs.getDouble('custom_price_alert_target_${activeSymbol.toUpperCase()}');
     if (cachedEnabled != null || cachedTarget != null) {
@@ -137,10 +173,12 @@ class SocketService with WidgetsBindingObserver {
         _serverUrl,
         io.OptionBuilder()
             .setTransports(['websocket', 'polling'])
-            .disableAutoConnect()
+            .enableAutoConnect()
             .enableReconnection()
             .setReconnectionAttempts(9999)
             .setReconnectionDelay(1000)
+            .setReconnectionDelayMax(4000)
+            .setTimeout(8000)
             .build(),
       );
 
@@ -319,7 +357,7 @@ class SocketService with WidgetsBindingObserver {
           final now = DateTime.now().millisecondsSinceEpoch;
           final debounceKey = '${event.symbol}_${event.level}';
           final lastTrigger = _recentAlertTimestamps[debounceKey] ?? 0;
-          final isRecentDuplicate = (now - lastTrigger) < 6000; // 6-second lock for audio/dialog re-trigger
+          final isRecentDuplicate = (now - lastTrigger) < 6000;
 
           debugPrint('[SocketService] 🚨 Level Alert Received: ${event.symbol} ${event.level} @ \$${event.currentPrice} (isDuplicate: $isRecentDuplicate)');
 
@@ -366,6 +404,7 @@ class SocketService with WidgetsBindingObserver {
           // 3. If this is a fresh new touch trigger
           if (!isRecentDuplicate) {
             _recentAlertTimestamps[debounceKey] = now;
+            _recentAlertTimestamps[event.id] = now;
 
             // Trigger in-app UI dialog
             onAlertTriggered?.call(event);
@@ -382,8 +421,6 @@ class SocketService with WidgetsBindingObserver {
             } catch (ne) {
               debugPrint('[SocketService] showAlertNotification error: $ne');
             }
-          } else if (event.screenshotPath.isNotEmpty) {
-            debugPrint('[SocketService] Finalized screenshot captured for ${event.level}: ${event.screenshotPath}');
           }
         } catch (e, stack) {
           debugPrint('[SocketService] handleIncomingAlert error: $e\n$stack');
@@ -393,9 +430,7 @@ class SocketService with WidgetsBindingObserver {
       // Register primary alert event listeners
       _socket?.on('alert:triggered', handleIncomingAlert);
       _socket?.on('alert_triggered', handleIncomingAlert);
-      _socket?.on('custom_alert:triggered', (data) {
-        handleIncomingAlert(data);
-      });
+      _socket?.on('custom_alert:triggered', handleIncomingAlert);
 
       void handleLevelStates(dynamic data) {
         if (data != null) {
@@ -456,7 +491,7 @@ class SocketService with WidgetsBindingObserver {
         }
       });
 
-      // Now initiate connection
+      // Connect
       _socket?.connect();
     } catch (e) {
       debugPrint('[SocketService] connectSocket exception: $e');
@@ -465,7 +500,7 @@ class SocketService with WidgetsBindingObserver {
     }
   }
 
-  /// Client-side fail-safe evaluator for active custom price alert
+  /// Client-side fail-safe evaluator for active custom price alert (Proximity + Tick Crossing)
   void _evaluateLocalCustomPriceTouch(MarketTick tick) {
     if (!currentConfig.customPriceAlertEnabled) return;
     final targetPrice = currentConfig.customPriceAlertTarget;
@@ -478,27 +513,37 @@ class SocketService with WidgetsBindingObserver {
     }
 
     final tolerance = currentConfig.tolerance > 0 ? currentConfig.tolerance : 0.20;
-    final diff = (tick.price - targetPrice).abs();
+    final currentPrice = tick.price;
+    final prevPrice = _lastEvaluatedPrice ?? currentPrice;
+    _lastEvaluatedPrice = currentPrice;
 
-    if (diff <= tolerance) {
+    // 1. Proximity range check
+    final isTouching = (currentPrice - targetPrice).abs() <= tolerance;
+
+    // 2. Tick crossing check (cross up or cross down)
+    final crossedUp = prevPrice < targetPrice && currentPrice >= targetPrice;
+    final crossedDown = prevPrice > targetPrice && currentPrice <= targetPrice;
+    final isCrossing = crossedUp || crossedDown;
+
+    if (isTouching || isCrossing) {
       final now = DateTime.now().millisecondsSinceEpoch;
       final debounceKey = '${sym}_CUSTOM';
       final lastTrigger = _recentAlertTimestamps[debounceKey] ?? 0;
       if (now - lastTrigger < 6000) return;
       _recentAlertTimestamps[debounceKey] = now;
 
-      debugPrint('[SocketService] 🎯 Local Tick Match for Custom Target: \$$targetPrice (Live: \$${tick.price})');
+      debugPrint('[SocketService] 🎯 Local Tick Match for Custom Target: \$$targetPrice (Live: \$$currentPrice, Crossing: $isCrossing)');
 
       final localEvent = AlertEvent(
-        id: 'local_touch_${now}',
+        id: 'local_touch_$now',
         symbol: activeSymbol,
         displayName: activeSymbolConfig?.displayName ?? tick.displayName,
         level: 'CUSTOM',
         levelPrice: targetPrice,
-        currentPrice: tick.price,
+        currentPrice: currentPrice,
         tolerance: tolerance,
         screenshotPath: '',
-        triggerReason: '$activeSymbol touched custom target price @ \$${tick.price.toStringAsFixed(2)}',
+        triggerReason: '$activeSymbol touched custom target price @ \$${currentPrice.toStringAsFixed(2)}',
         telegramStatus: 'SENT',
         timestamp: DateTime.now(),
         isTest: false,
@@ -574,9 +619,9 @@ class SocketService with WidgetsBindingObserver {
   Future<bool> triggerRemoteTestAlert({String level = 'CUSTOM', double? price}) async {
     try {
       final targetPrice = price ?? (currentConfig.customPriceAlertTarget > 0 ? currentConfig.customPriceAlertTarget : null);
-      final payload = {
+      final payload = <String, dynamic>{
         'level': level,
-        if (targetPrice != null) 'price': targetPrice,
+        'price': ?targetPrice,
       };
       final res = await http.post(
         Uri.parse('$_serverUrl/api/test/trigger-alert'),
@@ -588,6 +633,13 @@ class SocketService with WidgetsBindingObserver {
       debugPrint('[SocketService] triggerRemoteTestAlert error: $e');
       return false;
     }
+  }
+
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    disconnectSocket();
   }
 
   /// Ping server to test HTTP & WebSocket connectivity with latency measurement

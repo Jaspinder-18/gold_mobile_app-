@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../models/market_data.dart';
@@ -44,7 +43,7 @@ class NotificationService {
       },
     );
 
-    // 1. Create Loud Alarm Notification Channel with raw resource sound
+    // 1. Create Loud Alarm Notification Channel with raw resource sound & full screen priority
     final alarmChannel = AndroidNotificationChannel(
       'gold_alarm_channel_v4',
       '🚨 High Priority Price Level Alarms',
@@ -94,7 +93,6 @@ class NotificationService {
   }
 
   /// Request runtime permissions on Android 13+ (API 33+) & iOS
-  /// Call this when the UI is mounted so the system dialog can display properly
   Future<bool> requestPermissions() async {
     try {
       final androidImpl = _notificationsPlugin.resolvePlatformSpecificImplementation<
@@ -149,6 +147,7 @@ class NotificationService {
         channelDescription: 'Loud alarm clock notifications for market price touches',
         importance: Importance.max,
         priority: Priority.max,
+        fullScreenIntent: true,
         playSound: true,
         sound: const RawResourceAndroidNotificationSound('alarm_clock'),
         enableVibration: true,
@@ -193,6 +192,7 @@ class NotificationService {
           '🔔 Market Price Touch Alerts',
           importance: Importance.max,
           priority: Priority.max,
+          fullScreenIntent: true,
           playSound: true,
           enableVibration: true,
           visibility: NotificationVisibility.public,

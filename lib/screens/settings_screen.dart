@@ -143,49 +143,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _handleAutoCalc() async {
-    setState(() => _isSaving = true);
-    final ok = await _socketService.autoCalculatePivots();
-    setState(() => _isSaving = false);
-    if (ok) {
-      final cfg = _socketService.currentConfig;
-      setState(() {
-        _r3Controller.text = cfg.r3.toStringAsFixed(2);
-        _r2Controller.text = cfg.r2.toStringAsFixed(2);
-        _s2Controller.text = cfg.s2.toStringAsFixed(2);
-        _s3Controller.text = cfg.s3.toStringAsFixed(2);
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: Color(0xFF10B981),
-            content: Text('✨ Authoritative Pivot Levels auto-calculated & replaced!'),
-          ),
-        );
-      }
-    } else {
-      // Local fallback
-      final tick = _socketService.currentTick;
-      final price = tick?.price ?? 4481.17;
-      final h = (tick != null && tick.high > price) ? tick.high : (price + 32.0);
-      final l = (tick != null && tick.low < price) ? tick.low : (price - 32.0);
-      final c = price;
-      final range = h - l;
-      final p = (h + l + c) / 3;
 
-      setState(() {
-        _r3Controller.text = (p + 1.000 * range).toStringAsFixed(2);
-        _r2Controller.text = (p + 0.618 * range).toStringAsFixed(2);
-        _s2Controller.text = (p - 0.618 * range).toStringAsFixed(2);
-        _s3Controller.text = (p - 1.000 * range).toStringAsFixed(2);
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✨ Calculated Fibonacci levels from live market.')),
-        );
-      }
-    }
-  }
 
   Future<void> _handleTestPing() async {
     setState(() {
@@ -361,7 +319,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     Switch(
                       value: _customPriceAlertEnabled,
-                      activeColor: const Color(0xFFF59E0B),
+                      activeThumbColor: const Color(0xFFF59E0B),
                       activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.4),
                       inactiveThumbColor: Colors.grey[600],
                       inactiveTrackColor: const Color(0xFF1E293B),
@@ -758,28 +716,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildLevelField(String label, TextEditingController controller, Color color) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 13, fontWeight: FontWeight.bold),
-          decoration: InputDecoration(
-            isDense: true,
-            filled: true,
-            fillColor: const Color(0xFF090D16),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: color)),
-          ),
-        ),
-      ],
-    );
-  }
+
 
   Widget _buildSectionHeader(String title) {
     return Padding(

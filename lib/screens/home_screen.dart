@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/market_data.dart';
 import '../services/socket_service.dart';
 import '../services/audio_service.dart';
@@ -700,18 +699,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ),
                 ],
               ),
-              Transform.scale(
-                scale: 0.85,
-                child: Switch(
-                  value: isEnabled,
-                  activeColor: const Color(0xFFF59E0B),
-                  activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.4),
-                  inactiveThumbColor: Colors.grey[600],
-                  inactiveTrackColor: const Color(0xFF1E293B),
-                  onChanged: (val) {
-                    _handleSaveCustomTargetAlert(newEnabledState: val);
-                  },
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (targetPrice > 0 || isEnabled)
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, color: Colors.white38, size: 18),
+                      tooltip: 'Delete Alert',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: _isSavingCustomAlert ? null : _handleDeleteCustomTargetAlert,
+                    ),
+                  const SizedBox(width: 4),
+                  Transform.scale(
+                    scale: 0.85,
+                    child: Switch(
+                      value: isEnabled,
+                      activeThumbColor: const Color(0xFFF59E0B),
+                      activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                      inactiveThumbColor: Colors.grey[600],
+                      inactiveTrackColor: const Color(0xFF1E293B),
+                      onChanged: (val) {
+                        _handleSaveCustomTargetAlert(newEnabledState: val);
+                      },
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

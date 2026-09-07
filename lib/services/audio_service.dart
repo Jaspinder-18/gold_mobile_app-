@@ -69,7 +69,7 @@ class AudioService {
       _soundEnabled = prefs.getBool('alert_sound_enabled') ?? true;
       _vibrationEnabled = prefs.getBool('alert_vibration_enabled') ?? true;
 
-      // Configure AudioContext for alarm clock usage
+      // Configure AudioContext for loud speaker alarm usage
       await _applyAudioContext();
       await _player.setVolume(_volume);
 
@@ -89,7 +89,7 @@ class AudioService {
       await _player.setAudioContext(
         AudioContext(
           android: AudioContextAndroid(
-            isSpeakerphoneOn: false,
+            isSpeakerphoneOn: true, // Forces sound to LOUD speaker instead of ear receiver
             stayAwake: true,
             contentType: AndroidContentType.sonification,
             usageType: AndroidUsageType.alarm,
@@ -202,22 +202,22 @@ class AudioService {
   }
 
   Future<void> _playAssetFile(String fileName) async {
-    // 1. Primary: AssetSource with default 'assets/' prefix
-    try {
-      await _player.play(AssetSource('sounds/$fileName'));
-      return;
-    } catch (e) {
-      debugPrint('[AudioService] AssetSource(sounds/$fileName) failed ($e), trying rootBundle memory stream...');
-    }
-
-    // 2. Fallback: Direct rootBundle byte buffer loading (100% reliable)
+    // 1. Primary: Direct in-memory byte buffer from rootBundle (100% reliable across Android & iOS)
     try {
       final byteData = await rootBundle.load('assets/sounds/$fileName');
       final bytes = byteData.buffer.asUint8List();
       await _player.play(BytesSource(bytes));
       return;
+    } catch (e) {
+      debugPrint('[AudioService] BytesSource failed ($e), falling back to AssetSource...');
+    }
+
+    // 2. Fallback: AssetSource with sounds/ prefix
+    try {
+      await _player.play(AssetSource('sounds/$fileName'));
+      return;
     } catch (e2) {
-      debugPrint('[AudioService] BytesSource fallback failed ($e2), trying direct asset path...');
+      debugPrint('[AudioService] AssetSource(sounds/$fileName) failed ($e2), trying direct asset path...');
     }
 
     // 3. Fallback: Full path
