@@ -7,6 +7,7 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../models/market_data.dart';
 import 'audio_service.dart';
 import 'notification_service.dart';
+import 'background_service.dart';
 
 double _asDouble(dynamic val, [double fallback = 0.0]) {
   if (val == null) return fallback;
@@ -142,13 +143,26 @@ class SocketService with WidgetsBindingObserver {
 
     await fetchInitialData();
     connectSocket();
+    BackgroundService().startService(
+      symbol: activeSymbol,
+      targetPrice: currentConfig.customPriceAlertTarget,
+      enabled: currentConfig.customPriceAlertEnabled,
+    );
   }
 
   Future<void> _persistCustomAlertState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('active_symbol', activeSymbol);
       await prefs.setBool('custom_price_alert_enabled_${activeSymbol.toUpperCase()}', currentConfig.customPriceAlertEnabled);
+      await prefs.setDouble('custom_target_price_${activeSymbol.toUpperCase()}', currentConfig.customPriceAlertTarget);
       await prefs.setDouble('custom_price_alert_target_${activeSymbol.toUpperCase()}', currentConfig.customPriceAlertTarget);
+
+      BackgroundService().updateCustomAlert(
+        symbol: activeSymbol,
+        targetPrice: currentConfig.customPriceAlertTarget,
+        enabled: currentConfig.customPriceAlertEnabled,
+      );
     } catch (e) {
       debugPrint('[SocketService] _persistCustomAlertState error: $e');
     }

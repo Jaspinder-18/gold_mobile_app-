@@ -75,6 +75,102 @@ class MarketTick {
   }
 }
 
+enum AppTimeframe {
+  tf1m('1m', '1', '1 Minute'),
+  tf2m('2m', '2', '2 Minutes'),
+  tf3m('3m', '3', '3 Minutes'),
+  tf4m('4m', '4', '4 Minutes'),
+  tf5m('5m', '5', '5 Minutes'),
+  tf10m('10m', '10', '10 Minutes'),
+  tf15m('15m', '15', '15 Minutes'),
+  tf30m('30m', '30', '30 Minutes'),
+  tf1h('1h', '60', '1 Hour'),
+  tf2h('2h', '120', '2 Hours'),
+  tf4h('4h', '240', '4 Hours'),
+  tf1d('1D', '1D', '1 Day'),
+  tf2d('2D', '2D', '2 Days'),
+  tf3d('3D', '3D', '3 Days'),
+  tf4d('4D', '4D', '4 Days'),
+  tf5d('5D', '5D', '5 Days');
+
+  final String label;
+  final String apiValue;
+  final String fullTitle;
+  const AppTimeframe(this.label, this.apiValue, this.fullTitle);
+
+  static AppTimeframe fromString(String? val) {
+    if (val == null) return AppTimeframe.tf15m;
+    final clean = val.trim().toUpperCase().replaceAll('MINUTES', '').replaceAll('MIN', '').replaceAll('M', 'm').replaceAll('HOUR', 'h').replaceAll('H', 'h').replaceAll('DAY', 'D').replaceAll('DAYS', 'D').trim();
+    for (final tf in AppTimeframe.values) {
+      if (tf.label.toUpperCase() == clean.toUpperCase() || tf.apiValue.toUpperCase() == clean.toUpperCase()) {
+        return tf;
+      }
+    }
+    if (clean == '1') return AppTimeframe.tf1m;
+    if (clean == '2') return AppTimeframe.tf2m;
+    if (clean == '3') return AppTimeframe.tf3m;
+    if (clean == '4') return AppTimeframe.tf4m;
+    if (clean == '5') return AppTimeframe.tf5m;
+    if (clean == '10') return AppTimeframe.tf10m;
+    if (clean == '15') return AppTimeframe.tf15m;
+    if (clean == '30') return AppTimeframe.tf30m;
+    if (clean == '60' || clean == '1H') return AppTimeframe.tf1h;
+    if (clean == '120' || clean == '2H') return AppTimeframe.tf2h;
+    if (clean == '240' || clean == '4H') return AppTimeframe.tf4h;
+    if (clean == 'D' || clean == '1D') return AppTimeframe.tf1d;
+    if (clean == '2D') return AppTimeframe.tf2d;
+    if (clean == '3D') return AppTimeframe.tf3d;
+    if (clean == '4D') return AppTimeframe.tf4d;
+    if (clean == '5D') return AppTimeframe.tf5d;
+    return AppTimeframe.tf15m;
+  }
+}
+
+enum AppChartRange {
+  r1d('1D', '1 Day', 1),
+  r2d('2D', '2 Days', 2),
+  r3d('3D', '3 Days', 3),
+  r4d('4D', '4 Days', 4),
+  r5d('5D', '5 Days', 5);
+
+  final String label;
+  final String title;
+  final int days;
+  const AppChartRange(this.label, this.title, this.days);
+
+  static AppChartRange fromString(String? val) {
+    if (val == null) return AppChartRange.r1d;
+    final upper = val.toUpperCase().trim();
+    for (final r in AppChartRange.values) {
+      if (r.label == upper || r.days.toString() == upper.replaceAll('D', '')) {
+        return r;
+      }
+    }
+    return AppChartRange.r1d;
+  }
+}
+
+enum AppBarSpacing {
+  veryCompact('Very Compact', 6),
+  compact('Compact', 10),
+  normal('Normal', 16),
+  wide('Wide', 22),
+  veryWide('Very Wide', 28);
+
+  final String label;
+  final int px;
+  const AppBarSpacing(this.label, this.px);
+
+  static AppBarSpacing fromValue(dynamic val) {
+    final numVal = _toInt(val, 16);
+    if (numVal <= 7) return AppBarSpacing.veryCompact;
+    if (numVal <= 12) return AppBarSpacing.compact;
+    if (numVal <= 18) return AppBarSpacing.normal;
+    if (numVal <= 24) return AppBarSpacing.wide;
+    return AppBarSpacing.veryWide;
+  }
+}
+
 class PivotConfig {
   final double r3;
   final double r2;
@@ -101,7 +197,7 @@ class PivotConfig {
     this.retriggerDistance = 1.00,
     this.chartTimeframe = '15',
     this.chartRange = '1D',
-    this.barSpacing = 22,
+    this.barSpacing = 16,
     this.telegramAlertsEnabled = true,
     this.autoCalculatePivot = false,
     this.autoCalcIntervalMinutes = 15,
@@ -120,7 +216,7 @@ class PivotConfig {
       retriggerDistance: _toDouble(json['retriggerDistance'], 1.00),
       chartTimeframe: json['chartTimeframe']?.toString() ?? '15',
       chartRange: json['chartRange']?.toString() ?? '1D',
-      barSpacing: _toInt(json['barSpacing'], 22),
+      barSpacing: _toInt(json['barSpacing'], 16),
       telegramAlertsEnabled: _toBool(json['telegramAlertsEnabled'], true),
       autoCalculatePivot: _toBool(json['autoCalculatePivot'], false),
       autoCalcIntervalMinutes: _toInt(json['autoCalcIntervalMinutes'], 15),
@@ -167,6 +263,7 @@ class PivotConfig {
     );
   }
 }
+
 
 class AlertEvent {
   final String id;

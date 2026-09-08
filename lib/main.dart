@@ -4,6 +4,7 @@ import 'screens/splash_screen.dart';
 import 'services/audio_service.dart';
 import 'services/notification_service.dart';
 import 'services/socket_service.dart';
+import 'services/background_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,6 +22,7 @@ void main() async {
   // Initialize Core Services
   await AudioService().initialize();
   await NotificationService().initialize();
+  await BackgroundService().initialize();
   await SocketService().initialize();
 
   runApp(const GoldAlertApp());

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/market_data.dart';
 import '../services/audio_service.dart';
 import '../services/notification_service.dart';
 import '../services/socket_service.dart';
@@ -13,12 +14,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _serverUrlController = TextEditingController();
-  final _r3Controller = TextEditingController();
-  final _r2Controller = TextEditingController();
-  final _s2Controller = TextEditingController();
-  final _s3Controller = TextEditingController();
-  final _toleranceController = TextEditingController();
-  final _retriggerController = TextEditingController();
+  final _customTargetPriceController = TextEditingController();
 
   final _audioService = AudioService();
   final _socketService = SocketService();
@@ -29,11 +25,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late double _volume;
   late bool _soundEnabled;
   late bool _vibrationEnabled;
-  late String _selectedRange;
-  late int _barSpacing;
-  late int _autoCalcIntervalMinutes;
+
+  // Chart settings
+  late AppTimeframe _selectedTimeframe;
+  late AppChartRange _selectedRange;
+  late AppBarSpacing _selectedBarSpacing;
+
+  // Custom alert settings
   late bool _customPriceAlertEnabled;
-  final TextEditingController _customTargetPriceController = TextEditingController();
   bool _isSaving = false;
   bool _isTestingPing = false;
   String? _pingResult;
@@ -47,12 +46,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _loadCurrentConfig() {
     final cfg = _socketService.currentConfig;
     _serverUrlController.text = _socketService.serverUrl;
-    _r3Controller.text = cfg.r3.toStringAsFixed(2);
-    _r2Controller.text = cfg.r2.toStringAsFixed(2);
-    _s2Controller.text = cfg.s2.toStringAsFixed(2);
-    _s3Controller.text = cfg.s3.toStringAsFixed(2);
-    _toleranceController.text = cfg.tolerance.toStringAsFixed(2);
-    _retriggerController.text = cfg.retriggerDistance.toStringAsFixed(2);
 
     _customPriceAlertEnabled = cfg.customPriceAlertEnabled;
     _customTargetPriceController.text = cfg.customPriceAlertTarget > 0 ? cfg.customPriceAlertTarget.toStringAsFixed(2) : '';
@@ -62,21 +55,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _volume = _audioService.volume;
     _soundEnabled = _audioService.soundEnabled;
     _vibrationEnabled = _audioService.vibrationEnabled;
-    _selectedRange = cfg.chartRange;
-    _barSpacing = cfg.barSpacing;
-    _autoCalcIntervalMinutes = cfg.autoCalcIntervalMinutes;
+
+    _selectedTimeframe = AppTimeframe.fromString(cfg.chartTimeframe);
+    _selectedRange = AppChartRange.fromString(cfg.chartRange);
+    _selectedBarSpacing = AppBarSpacing.fromValue(cfg.barSpacing);
   }
 
   @override
   void dispose() {
     _audioService.stop();
     _serverUrlController.dispose();
-    _r3Controller.dispose();
-    _r2Controller.dispose();
-    _s2Controller.dispose();
-    _s3Controller.dispose();
-    _toleranceController.dispose();
-    _retriggerController.dispose();
     _customTargetPriceController.dispose();
     super.dispose();
   }
@@ -84,12 +72,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _handleSaveAll() async {
     setState(() => _isSaving = true);
     try {
-      final r3 = double.tryParse(_r3Controller.text) ?? _socketService.currentConfig.r3;
-      final r2 = double.tryParse(_r2Controller.text) ?? _socketService.currentConfig.r2;
-      final s2 = double.tryParse(_s2Controller.text) ?? _socketService.currentConfig.s2;
-      final s3 = double.tryParse(_s3Controller.text) ?? _socketService.currentConfig.s3;
-      final tolerance = double.tryParse(_toleranceController.text) ?? _socketService.currentConfig.tolerance;
-      final retrigger = double.tryParse(_retriggerController.text) ?? _socketService.currentConfig.retriggerDistance;
       final customTarget = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? _socketService.currentConfig.customPriceAlertTarget;
 
       // Save Audio & Notification Settings
@@ -100,25 +82,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _audioService.setVibrationEnabled(_vibrationEnabled);
 
       final success = await _socketService.updateRemoteConfig({
-        'r3': r3,
-        'r2': r2,
-        's2': s2,
-        's3': s3,
-        'tolerance': tolerance,
-        'retriggerDistance': retrigger,
-        'chartRange': _selectedRange,
-        'barSpacing': _barSpacing,
-        'autoCalculatePivot': true,
-        'autoCalcIntervalMinutes': _autoCalcIntervalMinutes,
+        'chartTimeframe': _selectedTimeframe.apiValue,
+        'chartRange': _selectedRange.label,
+        'barSpacing': _selectedBarSpacing.px,
         'customPriceAlertEnabled': _customPriceAlertEnabled,
         'customPriceAlertTarget': customTarget,
       });
 
-      // Cache custom alert locally
+      // Cache custom alert & chart settings locally in SharedPreferences
       try {
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setDouble('custom_target_price_${_socketService.activeSymbol.toUpperCase()}', customTarget);
-        await prefs.setBool('custom_price_alert_enabled_${_socketService.activeSymbol.toUpperCase()}', _customPriceAlertEnabled);
+        final sym = _socketService.activeSymbol.toUpperCase();
+        await prefs.setDouble('custom_target_price_$sym', customTarget);
+        await prefs.setDouble('custom_price_alert_target_$sym', customTarget);
+        await prefs.setBool('custom_price_alert_enabled_$sym', _customPriceAlertEnabled);
+        await prefs.setString('chart_timeframe_$sym', _selectedTimeframe.apiValue);
+        await prefs.setString('chart_range_$sym', _selectedRange.label);
+        await prefs.setInt('bar_spacing_$sym', _selectedBarSpacing.px);
       } catch (_) {}
 
       // Update server URL if changed
@@ -132,7 +112,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SnackBar(
             backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFEF4444),
             content: Text(
-              success ? '✓ All Settings, Sounds & Price Levels Synchronized Live!' : 'Failed to update remote settings',
+              success ? '✓ Settings Saved & Synchronized Live!' : 'Failed to update remote settings',
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
@@ -143,7 +123,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-
+  Future<void> _handleCancelAlert() async {
+    setState(() => _isSaving = true);
+    try {
+      final ok = await _socketService.deleteCustomPriceAlert();
+      if (mounted) {
+        setState(() {
+          _customPriceAlertEnabled = false;
+          _customTargetPriceController.clear();
+          _isSaving = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: ok ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+            content: Text(ok ? '✓ Custom Alert Cancelled and Monitoring Stopped.' : 'Failed to cancel alert.'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
 
   Future<void> _handleTestPing() async {
     setState(() {
@@ -180,7 +180,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         SnackBar(
           backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFEF4444),
           content: Text(
-            success ? '🚨 Server Custom Alert Triggered @ \$${targetPrice.toStringAsFixed(2)}! Incoming Alert Dispatched to all devices.' : 'Failed to trigger server alert. Check server connection.',
+            success ? '🚨 Server Alert Triggered @ \$${targetPrice.toStringAsFixed(2)}! Dispatched to all devices.' : 'Failed to trigger server alert. Check connection.',
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
         ),
@@ -190,533 +190,746 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final livePrice = _socketService.currentTick?.price ?? 3448.20;
+    final targetPrice = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? _socketService.currentConfig.customPriceAlertTarget;
+    final distance = (livePrice - targetPrice).abs();
+    final customState = _socketService.levelStates['CUSTOM'] ?? 'INACTIVE';
+    final isTriggered = customState == 'TRIGGERED';
+    final isActive = _customPriceAlertEnabled && targetPrice > 0 && !isTriggered;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF090D16),
+      backgroundColor: const Color(0xFF070A12),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0F172A),
+        backgroundColor: const Color(0xFF0E1626),
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 18),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          'Settings & Level Engine',
+          'Settings & Configuration',
           style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
         actions: [
-          IconButton(
+          TextButton.icon(
             icon: _isSaving
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF59E0B)))
-                : const Icon(Icons.save, color: Color(0xFFF59E0B)),
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                : const Icon(Icons.save, color: Colors.black, size: 16),
+            label: const Text('SAVE', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 12)),
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFF59E0B),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
             onPressed: _isSaving ? null : _handleSaveAll,
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         children: [
-          // Quick Test Banner
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  const Color(0xFFEF4444).withValues(alpha: 0.18),
-                  const Color(0xFFF59E0B).withValues(alpha: 0.18),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Row(
-                  children: [
-                    Icon(Icons.crisis_alert, color: Color(0xFFF59E0B), size: 24),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Test Alert & Notification Engine', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                          Text('Verify sound, vibration, and push notifications', style: TextStyle(color: Colors.white60, fontSize: 10)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.volume_up, size: 14, color: Colors.white),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFEF4444),
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                        onPressed: _handleTestAlarmAndNotification,
-                        label: const Text('LOCAL TEST', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11)),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.cloud_upload, size: 14, color: Colors.black),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFF59E0B),
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                        onPressed: _handleTestServerAlert,
-                        label: const Text('SERVER TEST', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11)),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          // 1. QUICK ALERT ENGINE TEST BANNER
+          _buildTestBanner(),
 
-          // Section: Custom Specific Price Alert
-          _buildSectionHeader('🎯 CUSTOM SPECIFIC PRICE ALERT (ON / OFF)'),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0F172A),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: _customPriceAlertEnabled ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
-                width: _customPriceAlertEnabled ? 1.5 : 1,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Enable Custom Price Alarm',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                          ),
-                          Text(
-                            _customPriceAlertEnabled ? 'Active: Alarm rings when market touches target' : 'Paused / Off',
-                            style: TextStyle(
-                              color: _customPriceAlertEnabled ? const Color(0xFFFBBF24) : Colors.white38,
-                              fontSize: 10,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Switch(
-                      value: _customPriceAlertEnabled,
-                      activeThumbColor: const Color(0xFFF59E0B),
-                      activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.4),
-                      inactiveThumbColor: Colors.grey[600],
-                      inactiveTrackColor: const Color(0xFF1E293B),
-                      onChanged: (val) {
-                        setState(() => _customPriceAlertEnabled = val);
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _customTargetPriceController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontWeight: FontWeight.bold),
-                  decoration: InputDecoration(
-                    labelText: 'Custom Target Price (\$ USD)',
-                    labelStyle: const TextStyle(color: Color(0xFFF59E0B), fontSize: 12),
-                    hintText: 'e.g. 4410.00',
-                    hintStyle: const TextStyle(color: Colors.white24),
-                    filled: true,
-                    fillColor: const Color(0xFF070A12),
-                    isDense: true,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
-                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFF59E0B))),
-                  ),
-                ),
-              ],
-            ),
-          ),
+          const SizedBox(height: 12),
+
+          // 2. CHART SETTINGS CARD (Timeframe, Chart Range, Bar Spacing)
+          _buildSectionHeader('📊 CHART SETTINGS'),
+          _buildChartSettingsCard(),
 
           const SizedBox(height: 14),
 
-          // Section: Alert Sound Selection (Clock / Reminder)
-          _buildSectionHeader('🔔 LOUD ALARM & RINGTONE SETTINGS'),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0F172A),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF1E293B)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Notification Permission Row
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  leading: const Icon(Icons.notifications_active, color: Color(0xFFF59E0B), size: 20),
-                  title: const Text('System Push Notifications', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                  subtitle: const Text('Required for lock-screen alarm banner', style: TextStyle(color: Colors.white60, fontSize: 10)),
-                  trailing: TextButton(
-                    style: TextButton.styleFrom(
-                      backgroundColor: const Color(0xFF1E293B),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    ),
-                    onPressed: () async {
-                      await _notificationService.requestPermissions();
-                      await _notificationService.testNotification();
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Notification permission requested and test dispatched!')),
-                        );
-                      }
-                    },
-                    child: const Text('Grant / Test', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-                const Divider(color: Color(0xFF1E293B)),
-
-                // 1. Alarm Sound Switch
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  title: const Text('Alarm Sound on Level Touch', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                  subtitle: const Text('Play loud alarm ringtone when R3, R2, S2, S3 are touched', style: TextStyle(color: Colors.white60, fontSize: 10)),
-                  value: _soundEnabled,
-                  activeThumbColor: const Color(0xFFF59E0B),
-                  onChanged: (val) async {
-                    setState(() => _soundEnabled = val);
-                    await _audioService.setSoundEnabled(val);
-                  },
-                ),
-
-                // 2. Vibration Switch
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  title: const Text('Vibrate on Level Touch', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                  subtitle: const Text('Tactile haptic vibration when price touches target levels', style: TextStyle(color: Colors.white60, fontSize: 10)),
-                  value: _vibrationEnabled,
-                  activeThumbColor: const Color(0xFFF59E0B),
-                  onChanged: (val) async {
-                    setState(() => _vibrationEnabled = val);
-                    await _audioService.setVibrationEnabled(val);
-                  },
-                ),
-
-                const Divider(color: Color(0xFF1E293B)),
-                const SizedBox(height: 6),
-
-                // 3. Ringtone Loop Duration Selector (1 min, 5 min, etc.)
-                const Text('Ringtone Loop Duration:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
-                const SizedBox(height: 3),
-                const Text('How long the alarm rings before automatically silencing', style: TextStyle(color: Colors.white38, fontSize: 9)),
-                const SizedBox(height: 8),
-
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: RingtoneLoopMode.values.map((mode) {
-                    final isSel = _selectedLoopMode == mode;
-                    return InkWell(
-                      onTap: () async {
-                        setState(() => _selectedLoopMode = mode);
-                        await _audioService.setLoopMode(mode);
-                      },
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF090D16),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
-                            width: isSel ? 1.5 : 1,
-                          ),
-                        ),
-                        child: Text(
-                          mode.label,
-                          style: TextStyle(
-                            color: isSel ? Colors.black : Colors.white70,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 10,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-
-                const SizedBox(height: 12),
-                const Divider(color: Color(0xFF1E293B)),
-                const SizedBox(height: 6),
-
-                // 4. Choose Ringtone
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Choose Alarm Sound:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
-                    if (_audioService.isPlaying)
-                      InkWell(
-                        onTap: () async {
-                          await _audioService.stop();
-                          setState(() {});
-                        },
-                        borderRadius: BorderRadius.circular(4),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEF4444).withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFFEF4444)),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.stop, color: Colors.redAccent, size: 12),
-                              SizedBox(width: 2),
-                              Text('Stop Audio', style: TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.bold)),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-
-                ...AlertSound.values.map((sound) {
-                  final isSelected = _selectedSound == sound;
-                  return InkWell(
-                    onTap: () async {
-                      setState(() => _selectedSound = sound);
-                      await _audioService.setSound(sound);
-                      await _audioService.testSound(sound);
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(vertical: 3),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: isSelected ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF090D16),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: isSelected ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
-                          width: isSelected ? 1.5 : 1,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                            color: isSelected ? const Color(0xFFF59E0B) : Colors.grey,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              sound.title,
-                              style: TextStyle(
-                                color: isSelected ? Colors.white : Colors.white70,
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.volume_up, color: Color(0xFFF59E0B), size: 16),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                            onPressed: () => _audioService.testSound(sound),
-                            tooltip: 'Test Sound',
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }),
-
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Text('Volume:', style: TextStyle(color: Colors.white70, fontSize: 11)),
-                    Expanded(
-                      child: Slider(
-                        value: _volume,
-                        min: 0.0,
-                        max: 1.0,
-                        divisions: 10,
-                        activeColor: const Color(0xFFF59E0B),
-                        inactiveColor: const Color(0xFF1E293B),
-                        onChanged: (v) async {
-                          setState(() => _volume = v);
-                          await _audioService.setVolume(v);
-                        },
-                      ),
-                    ),
-                    Text('${(_volume * 100).toInt()}%', style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 11)),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          // 3. CUSTOM PRICE ALERT CARD
+          _buildSectionHeader('🎯 CUSTOM PRICE ALERT'),
+          _buildCustomPriceAlertCard(livePrice, targetPrice, distance, isActive, isTriggered),
 
           const SizedBox(height: 14),
 
-          // Section: Backend Server URL
-          _buildSectionHeader('🌐 BACKEND SERVER URL & DIAGNOSTICS'),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0F172A),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF1E293B)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: _serverUrlController,
-                  style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 12),
-                  decoration: InputDecoration(
-                    filled: true,
-                    fillColor: const Color(0xFF090D16),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: Color(0xFF1E293B)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: Color(0xFFF59E0B)),
-                    ),
-                    prefixIcon: const Icon(Icons.cloud_queue, color: Color(0xFFF59E0B), size: 18),
-                  ),
-                ),
-                const SizedBox(height: 8),
+          // 4. LOUD ALARM & SYSTEM PUSH NOTIFICATION SETTINGS
+          _buildSectionHeader('🔔 LOUD ALARM & NOTIFICATION SETTINGS'),
+          _buildAudioAndNotificationCard(),
 
-                // Quick Presets
-                const Text('Quick Presets:', style: TextStyle(color: Colors.white60, fontSize: 10)),
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: [
-                    ActionChip(
-                      backgroundColor: const Color(0xFF1E293B),
-                      label: const Text('☁️ Cloud (Render)', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 10)),
-                      onPressed: () {
-                        _serverUrlController.text = 'https://gold-server-dbbq.onrender.com';
-                      },
-                    ),
-                    ActionChip(
-                      backgroundColor: const Color(0xFF1E293B),
-                      label: const Text('📱 Android Emulator', style: TextStyle(color: Color(0xFF10B981), fontSize: 10)),
-                      onPressed: () {
-                        _serverUrlController.text = 'http://10.0.2.2:5001';
-                      },
-                    ),
-                    ActionChip(
-                      backgroundColor: const Color(0xFF1E293B),
-                      label: const Text('💻 Localhost Port 5001', style: TextStyle(color: Color(0xFF60A5FA), fontSize: 10)),
-                      onPressed: () {
-                        _serverUrlController.text = 'http://localhost:5001';
-                      },
-                    ),
-                  ],
-                ),
+          const SizedBox(height: 14),
 
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: _isTestingPing
-                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF59E0B)))
-                            : const Icon(Icons.speed, color: Color(0xFFF59E0B), size: 16),
-                        label: const Text('Test Ping', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Color(0xFFF59E0B)),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                        onPressed: _isTestingPing ? null : _handleTestPing,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      flex: 2,
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.sync, color: Colors.black, size: 16),
-                        label: const Text('Save & Reconnect', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFF59E0B),
-                          minimumSize: const Size.fromHeight(38),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                        onPressed: () async {
-                          final newUrl = _serverUrlController.text.trim();
-                          if (newUrl.isNotEmpty) {
-                            await _socketService.updateServerUrl(newUrl);
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Server URL updated and reconnect initiated!')),
-                              );
-                            }
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                if (_pingResult != null) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: _pingResult!.contains('Connected')
-                          ? const Color(0xFF10B981).withValues(alpha: 0.15)
-                          : const Color(0xFFEF4444).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                        color: _pingResult!.contains('Connected') ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                      ),
-                    ),
-                    child: Text(
-                      _pingResult!,
-                      style: TextStyle(
-                        color: _pingResult!.contains('Connected') ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                        fontSize: 11,
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ],
+          // 5. SERVER DIAGNOSTICS & PING TEST
+          _buildSectionHeader('🌐 BACKEND SERVER & DIAGNOSTICS'),
+          _buildServerDiagnosticsCard(),
+
+          const SizedBox(height: 16),
+
+          // 6. BOTTOM SAVE BUTTON
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton.icon(
+              icon: _isSaving
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                  : const Icon(Icons.check_circle, color: Colors.black, size: 18),
+              label: Text(
+                _isSaving ? 'SAVING SETTINGS...' : 'SAVE ALL SETTINGS',
+                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFF59E0B),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 4,
+              ),
+              onPressed: _isSaving ? null : _handleSaveAll,
             ),
           ),
-          const SizedBox(height: 20),
+
+          const SizedBox(height: 24),
         ],
       ),
     );
   }
 
+  Widget _buildTestBanner() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFFEF4444).withValues(alpha: 0.18),
+            const Color(0xFFF59E0B).withValues(alpha: 0.18),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.crisis_alert, color: Color(0xFFF59E0B), size: 22),
+              SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Test Alert & Notification Engine', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                    Text('Verify loud alarm sound, full-screen notification & vibration', style: TextStyle(color: Colors.white60, fontSize: 10)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.volume_up, size: 14, color: Colors.white),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFEF4444),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: _handleTestAlarmAndNotification,
+                  label: const Text('LOCAL TEST', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.cloud_upload, size: 14, color: Colors.black),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF59E0B),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: _handleTestServerAlert,
+                  label: const Text('SERVER TEST', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
+  Widget _buildChartSettingsCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1E293B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 1. TIMEFRAME SELECTOR (16 Options)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.schedule, color: Color(0xFFF59E0B), size: 16),
+                  SizedBox(width: 6),
+                  Text('Time Frame', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  _selectedTimeframe.fullTitle,
+                  style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF070A12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF1E293B)),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<AppTimeframe>(
+                value: _selectedTimeframe,
+                isExpanded: true,
+                dropdownColor: const Color(0xFF0E1626),
+                icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFFF59E0B)),
+                items: AppTimeframe.values.map((tf) {
+                  return DropdownMenuItem<AppTimeframe>(
+                    value: tf,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(tf.fullTitle, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E293B),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(tf.label, style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 10, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+                onChanged: (val) {
+                  if (val != null) setState(() => _selectedTimeframe = val);
+                },
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 14),
+          const Divider(color: Color(0xFF1E293B), height: 1),
+          const SizedBox(height: 12),
+
+          // 2. CHART RANGE SELECTOR (1D, 2D, 3D, 4D, 5D)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.calendar_month, color: Color(0xFFF59E0B), size: 16),
+                  SizedBox(width: 6),
+                  Text('Chart Range', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                ],
+              ),
+              Text(
+                '${_selectedRange.title} candles',
+                style: const TextStyle(color: Colors.white60, fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: AppChartRange.values.map((r) {
+              final isSel = _selectedRange == r;
+              return Expanded(
+                child: InkWell(
+                  onTap: () => setState(() => _selectedRange = r),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF070A12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
+                        width: isSel ? 1.5 : 1,
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      r.label,
+                      style: TextStyle(
+                        color: isSel ? Colors.black : Colors.white70,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+
+          const SizedBox(height: 14),
+          const Divider(color: Color(0xFF1E293B), height: 1),
+          const SizedBox(height: 12),
+
+          // 3. BAR SPACING SELECTOR
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.view_column, color: Color(0xFFF59E0B), size: 16),
+                  SizedBox(width: 6),
+                  Text('Bar Spacing', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                ],
+              ),
+              Text(
+                '${_selectedBarSpacing.label} (${_selectedBarSpacing.px}px)',
+                style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: AppBarSpacing.values.map((sp) {
+                final isSel = _selectedBarSpacing == sp;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: ChoiceChip(
+                    label: Text(
+                      sp.label,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: isSel ? Colors.black : Colors.white70,
+                      ),
+                    ),
+                    selected: isSel,
+                    selectedColor: const Color(0xFFF59E0B),
+                    backgroundColor: const Color(0xFF070A12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: BorderSide(color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B)),
+                    ),
+                    onSelected: (_) => setState(() => _selectedBarSpacing = sp),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCustomPriceAlertCard(double livePrice, double targetPrice, double distance, bool isActive, bool isTriggered) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isTriggered ? const Color(0xFFEF4444) : (isActive ? const Color(0xFFF59E0B) : const Color(0xFF1E293B)),
+          width: isActive || isTriggered ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: isTriggered ? const Color(0xFFEF4444) : (isActive ? const Color(0xFF10B981) : Colors.grey),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    isTriggered ? '● TRIGGERED' : (isActive ? '● ACTIVE' : '● INACTIVE / PAUSED'),
+                    style: TextStyle(
+                      color: isTriggered ? const Color(0xFFEF4444) : (isActive ? const Color(0xFF10B981) : Colors.white60),
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+              Switch(
+                value: _customPriceAlertEnabled,
+                activeThumbColor: const Color(0xFFF59E0B),
+                activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                inactiveThumbColor: Colors.grey[600],
+                inactiveTrackColor: const Color(0xFF1E293B),
+                onChanged: (val) {
+                  setState(() => _customPriceAlertEnabled = val);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _customTargetPriceController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontWeight: FontWeight.w900, fontSize: 16),
+            decoration: InputDecoration(
+              labelText: 'Target Price (\$ USD)',
+              labelStyle: const TextStyle(color: Color(0xFFF59E0B), fontSize: 12),
+              prefixText: '\$ ',
+              prefixStyle: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold),
+              hintText: '3450.50',
+              hintStyle: const TextStyle(color: Colors.white24),
+              filled: true,
+              fillColor: const Color(0xFF070A12),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFF59E0B))),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          if (targetPrice > 0) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF070A12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF1E293B)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Live Price: \$${livePrice.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white60, fontSize: 10)),
+                      const SizedBox(height: 2),
+                      Text(
+                        targetPrice > livePrice ? '↗ TARGET ABOVE (+\$${distance.toStringAsFixed(2)})' : '↘ TARGET BELOW (-\$${distance.toStringAsFixed(2)})',
+                        style: TextStyle(
+                          color: targetPrice > livePrice ? const Color(0xFF10B981) : const Color(0xFF60A5FA),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (isActive)
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.close, size: 12, color: Color(0xFFEF4444)),
+                      label: const Text('CANCEL ALERT', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFFEF4444)),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                      ),
+                      onPressed: _handleCancelAlert,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAudioAndNotificationCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1E293B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: const Icon(Icons.notifications_active, color: Color(0xFFF59E0B), size: 22),
+            title: const Text('System Push Notifications', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+            subtitle: const Text('Required for lock-screen alarm banner and alert popups', style: TextStyle(color: Colors.white60, fontSize: 10)),
+            trailing: TextButton(
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFF1E293B),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              ),
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                await _notificationService.requestPermissions();
+                await _notificationService.testNotification();
+                messenger.showSnackBar(
+                  const SnackBar(content: Text('Notification test dispatched!')),
+                );
+              },
+              child: const Text('Grant / Test', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const Divider(color: Color(0xFF1E293B)),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Alarm Sound on Price Touch', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+            subtitle: const Text('Play loud alarm ringtone when custom target is reached', style: TextStyle(color: Colors.white60, fontSize: 10)),
+            value: _soundEnabled,
+            activeThumbColor: const Color(0xFFF59E0B),
+            onChanged: (val) async {
+              setState(() => _soundEnabled = val);
+              await _audioService.setSoundEnabled(val);
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Vibrate on Price Touch', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+            subtitle: const Text('Tactile haptic vibration when price touches target', style: TextStyle(color: Colors.white60, fontSize: 10)),
+            value: _vibrationEnabled,
+            activeThumbColor: const Color(0xFFF59E0B),
+            onChanged: (val) async {
+              setState(() => _vibrationEnabled = val);
+              await _audioService.setVibrationEnabled(val);
+            },
+          ),
+          const Divider(color: Color(0xFF1E293B)),
+          const SizedBox(height: 6),
+          const Text('Ringtone Loop Duration:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: RingtoneLoopMode.values.map((mode) {
+              final isSel = _selectedLoopMode == mode;
+              return InkWell(
+                onTap: () async {
+                  setState(() => _selectedLoopMode = mode);
+                  await _audioService.setLoopMode(mode);
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF070A12),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
+                      width: isSel ? 1.5 : 1,
+                    ),
+                  ),
+                  child: Text(
+                    mode.label,
+                    style: TextStyle(
+                      color: isSel ? Colors.black : Colors.white70,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 10,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+          const Divider(color: Color(0xFF1E293B)),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Choose Alarm Sound:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
+              if (_audioService.isPlaying)
+                InkWell(
+                  onTap: () async {
+                    await _audioService.stop();
+                    setState(() {});
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444).withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: const Color(0xFFEF4444)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.stop, color: Colors.redAccent, size: 12),
+                        SizedBox(width: 2),
+                        Text('Stop Audio', style: TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ...AlertSound.values.map((sound) {
+            final isSelected = _selectedSound == sound;
+            return InkWell(
+              onTap: () async {
+                setState(() => _selectedSound = sound);
+                await _audioService.setSound(sound);
+                await _audioService.testSound(sound);
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                margin: const EdgeInsets.symmetric(vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isSelected ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF070A12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isSelected ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
+                    width: isSelected ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                      color: isSelected ? const Color(0xFFF59E0B) : Colors.grey,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        sound.title,
+                        style: TextStyle(
+                          color: isSelected ? Colors.white : Colors.white70,
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.volume_up, color: Color(0xFFF59E0B), size: 16),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: () => _audioService.testSound(sound),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('Volume:', style: TextStyle(color: Colors.white70, fontSize: 11)),
+              Expanded(
+                child: Slider(
+                  value: _volume,
+                  min: 0.0,
+                  max: 1.0,
+                  divisions: 10,
+                  activeColor: const Color(0xFFF59E0B),
+                  inactiveColor: const Color(0xFF1E293B),
+                  onChanged: (v) async {
+                    setState(() => _volume = v);
+                    await _audioService.setVolume(v);
+                  },
+                ),
+              ),
+              Text('${(_volume * 100).toInt()}%', style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 11)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildServerDiagnosticsCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1E293B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _serverUrlController,
+            style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 12),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: const Color(0xFF070A12),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFF59E0B))),
+              prefixIcon: const Icon(Icons.cloud_queue, color: Color(0xFFF59E0B), size: 18),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: _isTestingPing
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF59E0B)))
+                      : const Icon(Icons.speed, color: Color(0xFFF59E0B), size: 16),
+                  label: const Text('Test Ping', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFF59E0B)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: _isTestingPing ? null : _handleTestPing,
+                ),
+              ),
+            ],
+          ),
+          if (_pingResult != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: _pingResult!.contains('Connected')
+                    ? const Color(0xFF10B981).withValues(alpha: 0.15)
+                    : const Color(0xFFEF4444).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: _pingResult!.contains('Connected') ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                ),
+              ),
+              child: Text(
+                _pingResult!,
+                style: TextStyle(
+                  color: _pingResult!.contains('Connected') ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
   Widget _buildSectionHeader(String title) {
     return Padding(
@@ -726,11 +939,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         style: const TextStyle(
           color: Color(0xFFF59E0B),
           fontWeight: FontWeight.w900,
-          fontSize: 10,
-          letterSpacing: 1.0,
+          fontSize: 11,
+          letterSpacing: 0.8,
         ),
       ),
     );
   }
 }
-
