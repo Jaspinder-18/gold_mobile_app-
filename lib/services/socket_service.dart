@@ -486,6 +486,32 @@ class SocketService with WidgetsBindingObserver {
   }
 
   Future<bool> updateRemoteConfig(Map<String, dynamic> data) async {
+    // 1. Immediately update in-memory currentConfig so the UI reflects changes instantly
+    try {
+      final updatedMap = {
+        'symbol': activeSymbol,
+        'chartTimeframe': currentConfig.chartTimeframe,
+        'chartRange': currentConfig.chartRange,
+        'barSpacing': currentConfig.barSpacing,
+        'customPriceAlertEnabled': currentConfig.customPriceAlertEnabled,
+        'customPriceAlertTarget': currentConfig.customPriceAlertTarget,
+        ...data,
+      };
+      currentConfig = PivotConfig.fromJson(updatedMap);
+      onConfigUpdate?.call(currentConfig);
+    } catch (_) {}
+
+    // 2. Also emit over Socket.IO if connected for instant live sync
+    try {
+      if (_socket != null && _socket!.connected) {
+        _socket!.emit('config:update', {
+          'symbol': activeSymbol,
+          ...data,
+        });
+      }
+    } catch (_) {}
+
+    // 3. Persist via HTTP PUT to server
     try {
       final payload = {
         'symbol': activeSymbol,
@@ -495,7 +521,7 @@ class SocketService with WidgetsBindingObserver {
         Uri.parse('$_serverUrl/api/config'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(payload),
-      ).timeout(const Duration(seconds: 8));
+      ).timeout(const Duration(seconds: 6));
 
       if (res.statusCode == 200) {
         final body = json.decode(res.body);
@@ -506,9 +532,9 @@ class SocketService with WidgetsBindingObserver {
         }
       }
     } catch (e) {
-      debugPrint('[SocketService] updateRemoteConfig error: $e');
+      debugPrint('[SocketService] updateRemoteConfig HTTP note: $e');
     }
-    return false;
+    return _socket != null && _socket!.connected;
   }
 
   Future<Map<String, dynamic>> checkServerConnectivity() async {

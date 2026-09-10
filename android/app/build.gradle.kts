@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "com.gold.alert.gold_mobile_app"
+    namespace = "com.telichat.mobile"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -22,7 +22,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.gold.alert.gold_mobile_app"
+        applicationId = "com.telichat.mobile"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

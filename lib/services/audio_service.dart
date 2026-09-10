@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -21,7 +23,8 @@ enum AlertSound {
   alarmClock('Alarm Clock (Loud Digital)', 'alarm_clock.wav'),
   reminderBell('Reminder Bell (Melodic Chime)', 'reminder_bell.wav'),
   radarAlert('Radar Alert (Tactical Ping)', 'radar_alert.wav'),
-  cyberSiren('Cyber Siren (Emergency Alarm)', 'cyber_siren.wav');
+  cyberSiren('Cyber Siren (Emergency Alarm)', 'cyber_siren.wav'),
+  customMedia('Custom Device Media / Sound', 'custom');
 
   final String title;
   final String fileName;
@@ -40,6 +43,8 @@ class AudioService {
   bool _soundEnabled = true;
   bool _vibrationEnabled = true;
   bool _isPlaying = false;
+  String? _customAudioPath;
+  String? _customAudioName;
   Timer? _stopTimer;
   Timer? _vibrationTimer;
 
@@ -49,10 +54,15 @@ class AudioService {
   bool get soundEnabled => _soundEnabled;
   bool get vibrationEnabled => _vibrationEnabled;
   bool get isPlaying => _isPlaying;
+  String? get customAudioPath => _customAudioPath;
+  String? get customAudioName => _customAudioName;
 
   Future<void> initialize() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      _customAudioPath = prefs.getString('custom_audio_path');
+      _customAudioName = prefs.getString('custom_audio_name');
+
       final soundName = prefs.getString('alert_sound') ?? AlertSound.alarmClock.name;
       _currentSound = AlertSound.values.firstWhere(
         (s) => s.name == soundName,
@@ -148,6 +158,32 @@ class AudioService {
     }
   }
 
+  Future<bool> pickAndSetCustomAudio() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'opus', 'wma'],
+      );
+
+      if (result != null && result.files.isNotEmpty && result.files.single.path != null) {
+        final path = result.files.single.path!;
+        final name = result.files.single.name;
+        _customAudioPath = path;
+        _customAudioName = name;
+        _currentSound = AlertSound.customMedia;
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('custom_audio_path', path);
+        await prefs.setString('custom_audio_name', name);
+        await prefs.setString('alert_sound', AlertSound.customMedia.name);
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[AudioService] pickAndSetCustomAudio error: $e');
+    }
+    return false;
+  }
+
   Future<void> playAlertSound({AlertSound? soundOverride, bool isManualTest = false}) async {
     if (!_soundEnabled && !isManualTest) return;
 
@@ -180,7 +216,20 @@ class AudioService {
         }
       }
 
-      await _playAssetFile(soundToPlay.fileName);
+      if (soundToPlay == AlertSound.customMedia) {
+        if (_customAudioPath != null && File(_customAudioPath!).existsSync()) {
+          try {
+            await _player.play(DeviceFileSource(_customAudioPath!));
+          } catch (e) {
+            debugPrint('[AudioService] DeviceFileSource playback failed: $e, falling back to asset...');
+            await _playAssetFile('alarm_clock.wav');
+          }
+        } else {
+          await _playAssetFile('alarm_clock.wav');
+        }
+      } else {
+        await _playAssetFile(soundToPlay.fileName);
+      }
       _isPlaying = true;
 
       // Start periodic vibration during alarm if enabled

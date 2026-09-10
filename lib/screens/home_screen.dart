@@ -760,7 +760,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           _buildMonitorTab(currentPrice, latestAlertWithImage),
           _buildScreenshotsTab(),
           _buildAlertsTab(),
-          const SettingsScreen(),
+          SettingsScreen(
+            onBackToMonitor: () {
+              if (mounted) setState(() => _currentTabIndex = 0);
+            },
+          ),
         ],
       ),
       bottomNavigationBar: Container(

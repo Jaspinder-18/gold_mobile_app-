@@ -6,7 +6,8 @@ import '../services/notification_service.dart';
 import '../services/socket_service.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final VoidCallback? onBackToMonitor;
+  const SettingsScreen({super.key, this.onBackToMonitor});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -74,22 +75,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final customTarget = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? _socketService.currentConfig.customPriceAlertTarget;
 
-      // Save Audio & Notification Settings
+      // 1. Save Audio & Notification Settings locally
       await _audioService.setSound(_selectedSound);
       await _audioService.setLoopMode(_selectedLoopMode);
       await _audioService.setVolume(_volume);
       await _audioService.setSoundEnabled(_soundEnabled);
       await _audioService.setVibrationEnabled(_vibrationEnabled);
 
-      final success = await _socketService.updateRemoteConfig({
-        'chartTimeframe': _selectedTimeframe.apiValue,
-        'chartRange': _selectedRange.label,
-        'barSpacing': _selectedBarSpacing.px,
-        'customPriceAlertEnabled': _customPriceAlertEnabled,
-        'customPriceAlertTarget': customTarget,
-      });
+      // 2. Update server URL if changed FIRST
+      final newUrl = _serverUrlController.text.trim();
+      if (newUrl.isNotEmpty && newUrl != _socketService.serverUrl) {
+        await _socketService.updateServerUrl(newUrl);
+      }
 
-      // Cache custom alert & chart settings locally in SharedPreferences
+      // 3. Cache custom alert & chart settings locally in SharedPreferences
       try {
         final prefs = await SharedPreferences.getInstance();
         final sym = _socketService.activeSymbol.toUpperCase();
@@ -101,20 +100,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
         await prefs.setInt('bar_spacing_$sym', _selectedBarSpacing.px);
       } catch (_) {}
 
-      // Update server URL if changed
-      final newUrl = _serverUrlController.text.trim();
-      if (newUrl.isNotEmpty && newUrl != _socketService.serverUrl) {
-        await _socketService.updateServerUrl(newUrl);
+      // 4. Update custom price alert
+      if (_customPriceAlertEnabled && customTarget > 0) {
+        _socketService.createCustomAlert(targetPrice: customTarget);
+      } else if (!_customPriceAlertEnabled) {
+        _socketService.clearAllCustomAlerts();
       }
+
+      // 5. Update remote config (optimistic local + remote sync)
+      final synced = await _socketService.updateRemoteConfig({
+        'chartTimeframe': _selectedTimeframe.apiValue,
+        'chartRange': _selectedRange.label,
+        'barSpacing': _selectedBarSpacing.px,
+        'customPriceAlertEnabled': _customPriceAlertEnabled,
+        'customPriceAlertTarget': customTarget,
+      });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-            content: Text(
-              success ? '✓ Settings Saved & Synchronized Live!' : 'Failed to update remote settings',
-              style: const TextStyle(fontWeight: FontWeight.bold),
+            backgroundColor: const Color(0xFF10B981),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    synced
+                        ? '✓ All Settings Saved & Synced Live!'
+                        : '✓ Settings Saved Locally on Device!',
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                ),
+              ],
             ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Color(0xFF10B981),
+            content: Text('✓ Settings Saved Locally on Device!'),
           ),
         );
       }
@@ -204,7 +234,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 18),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else if (widget.onBackToMonitor != null) {
+              widget.onBackToMonitor!();
+            }
+          },
         ),
         title: const Text(
           'Settings & Configuration',
@@ -787,50 +823,113 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 6),
           ...AlertSound.values.map((sound) {
             final isSelected = _selectedSound == sound;
-            return InkWell(
-              onTap: () async {
-                setState(() => _selectedSound = sound);
-                await _audioService.setSound(sound);
-                await _audioService.testSound(sound);
-              },
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                margin: const EdgeInsets.symmetric(vertical: 3),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: isSelected ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF070A12),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: isSelected ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
-                    width: isSelected ? 1.5 : 1,
-                  ),
+            final isCustom = sound == AlertSound.customMedia;
+
+            return Container(
+              margin: const EdgeInsets.symmetric(vertical: 3),
+              decoration: BoxDecoration(
+                color: isSelected ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF070A12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isSelected ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
+                  width: isSelected ? 1.5 : 1,
                 ),
-                child: Row(
-                  children: [
-                    Icon(
-                      isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                      color: isSelected ? const Color(0xFFF59E0B) : Colors.grey,
-                      size: 16,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        sound.title,
-                        style: TextStyle(
-                          color: isSelected ? Colors.white : Colors.white70,
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                          fontSize: 12,
-                        ),
+              ),
+              child: Column(
+                children: [
+                  InkWell(
+                    onTap: () async {
+                      if (isCustom && _audioService.customAudioPath == null) {
+                        final picked = await _audioService.pickAndSetCustomAudio();
+                        if (picked && mounted) {
+                          setState(() => _selectedSound = AlertSound.customMedia);
+                          await _audioService.testSound(AlertSound.customMedia);
+                        }
+                      } else {
+                        setState(() => _selectedSound = sound);
+                        await _audioService.setSound(sound);
+                        await _audioService.testSound(sound);
+                      }
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                            color: isSelected ? const Color(0xFFF59E0B) : Colors.grey,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Icon(
+                            isCustom ? Icons.music_note : Icons.audiotrack,
+                            color: isSelected ? const Color(0xFFF59E0B) : Colors.white54,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  sound.title,
+                                  style: TextStyle(
+                                    color: isSelected ? Colors.white : Colors.white70,
+                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                if (isCustom && _audioService.customAudioName != null) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '📁 ${_audioService.customAudioName!}',
+                                    style: const TextStyle(
+                                      color: Color(0xFF10B981),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      fontFamily: 'monospace',
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          if (isCustom)
+                            TextButton.icon(
+                              icon: const Icon(Icons.folder_open, size: 13, color: Color(0xFFF59E0B)),
+                              label: Text(
+                                _audioService.customAudioName != null ? 'Change' : 'Browse',
+                                style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                              style: TextButton.styleFrom(
+                                backgroundColor: const Color(0xFF1E293B),
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              onPressed: () async {
+                                final picked = await _audioService.pickAndSetCustomAudio();
+                                if (picked && mounted) {
+                                  setState(() => _selectedSound = AlertSound.customMedia);
+                                  await _audioService.testSound(AlertSound.customMedia);
+                                }
+                              },
+                            )
+                          else
+                            IconButton(
+                              icon: const Icon(Icons.volume_up, color: Color(0xFFF59E0B), size: 16),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              onPressed: () => _audioService.testSound(sound),
+                            ),
+                        ],
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.volume_up, color: Color(0xFFF59E0B), size: 16),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      onPressed: () => _audioService.testSound(sound),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             );
           }),
@@ -881,6 +980,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
               focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFF59E0B))),
               prefixIcon: const Icon(Icons.cloud_queue, color: Color(0xFFF59E0B), size: 18),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                ActionChip(
+                  backgroundColor: const Color(0xFF070A12),
+                  side: const BorderSide(color: Color(0xFF1E293B)),
+                  avatar: const Icon(Icons.cloud, color: Color(0xFFF59E0B), size: 14),
+                  label: const Text('Render Cloud', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  onPressed: () {
+                    setState(() {
+                      _serverUrlController.text = 'https://gold-server-dbbq.onrender.com';
+                    });
+                  },
+                ),
+                const SizedBox(width: 6),
+                ActionChip(
+                  backgroundColor: const Color(0xFF070A12),
+                  side: const BorderSide(color: Color(0xFF1E293B)),
+                  avatar: const Icon(Icons.wifi, color: Color(0xFF10B981), size: 14),
+                  label: const Text('Local PC (192.168.1.48)', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  onPressed: () {
+                    setState(() {
+                      _serverUrlController.text = 'http://192.168.1.48:5001';
+                    });
+                  },
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 8),

@@ -5,10 +5,24 @@ import 'package:intl/intl.dart';
 import '../models/market_data.dart';
 import '../services/socket_service.dart';
 
-class ScreenshotViewerScreen extends StatelessWidget {
+class ScreenshotViewerScreen extends StatefulWidget {
   final AlertEvent event;
 
   const ScreenshotViewerScreen({super.key, required this.event});
+
+  @override
+  State<ScreenshotViewerScreen> createState() => _ScreenshotViewerScreenState();
+}
+
+class _ScreenshotViewerScreenState extends State<ScreenshotViewerScreen> {
+  late AlertEvent _currentEvent;
+  bool _isCapturing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentEvent = widget.event;
+  }
 
   Color _getLevelColor(String level) {
     if (level.startsWith('R')) return const Color(0xFFEF4444);
@@ -16,16 +30,42 @@ class ScreenshotViewerScreen extends StatelessWidget {
     return const Color(0xFFF59E0B);
   }
 
-  String _formatImageUrl(String path) {
-    if (path.startsWith('http')) return path;
-    final baseUrl = SocketService().serverUrl;
-    return '$baseUrl$path';
+  String? _getValidImageUrl(String? path) {
+    if (path == null || path.trim().isEmpty) return null;
+    final cleanPath = path.trim();
+    if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
+      return cleanPath;
+    }
+    if (cleanPath.startsWith('/')) {
+      final baseUrl = SocketService().serverUrl.replaceAll(RegExp(r'/+$'), '');
+      return '$baseUrl$cleanPath';
+    }
+    return null;
+  }
+
+  Future<void> _handleCaptureFreshChart() async {
+    setState(() => _isCapturing = true);
+    try {
+      final cfg = SocketService().currentConfig;
+      final newEvent = await SocketService().captureScreenshot(
+        timeframe: cfg.chartTimeframe,
+        range: cfg.chartRange,
+        barSpacing: cfg.barSpacing,
+      );
+      if (mounted && newEvent != null && newEvent.screenshotPath.isNotEmpty) {
+        setState(() {
+          _currentEvent = newEvent;
+          _isCapturing = false;
+        });
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _isCapturing = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = _formatImageUrl(event.screenshotPath);
-    final levelColor = _getLevelColor(event.level);
+    final imageUrl = _getValidImageUrl(_currentEvent.screenshotPath);
+    final levelColor = _getLevelColor(_currentEvent.level);
     final dateFormat = DateFormat('MMM dd, yyyy · HH:mm:ss');
 
     return Scaffold(
@@ -47,7 +87,7 @@ class ScreenshotViewerScreen extends StatelessWidget {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                event.level,
+                _currentEvent.level,
                 style: TextStyle(
                   color: levelColor,
                   fontWeight: FontWeight.w900,
@@ -57,7 +97,7 @@ class ScreenshotViewerScreen extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Text(
-              '\$${event.currentPrice.toStringAsFixed(2)}',
+              '\$${_currentEvent.currentPrice.toStringAsFixed(2)}',
               style: const TextStyle(
                 color: Color(0xFFFBBF24),
                 fontWeight: FontWeight.bold,
@@ -69,15 +109,23 @@ class ScreenshotViewerScreen extends StatelessWidget {
         ),
         actions: [
           IconButton(
+            icon: _isCapturing
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF59E0B)))
+                : const Icon(Icons.refresh, color: Color(0xFFF59E0B)),
+            tooltip: 'Refresh Chart',
+            onPressed: _isCapturing ? null : _handleCaptureFreshChart,
+          ),
+          IconButton(
             icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            tooltip: 'Delete Alert',
             onPressed: () async {
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
                   backgroundColor: const Color(0xFF1E293B),
-                  title: const Text('Delete Screenshot?', style: TextStyle(color: Colors.white)),
+                  title: const Text('Delete Alert?', style: TextStyle(color: Colors.white)),
                   content: const Text(
-                    'Are you sure you want to permanently delete this screenshot alert?',
+                    'Are you sure you want to permanently delete this alert record?',
                     style: TextStyle(color: Colors.white70),
                   ),
                   actions: [
@@ -94,7 +142,7 @@ class ScreenshotViewerScreen extends StatelessWidget {
               );
 
               if (confirm == true) {
-                await SocketService().deleteAlert(event.id);
+                await SocketService().deleteAlert(_currentEvent.id);
                 if (context.mounted) Navigator.pop(context);
               }
             },
@@ -103,39 +151,32 @@ class ScreenshotViewerScreen extends StatelessWidget {
       ),
       body: Column(
         children: [
-          // Zoomable High-Res TradingView Chart Viewport
+          // Zoomable High-Res TradingView Chart Viewport or Fallback
           Expanded(
             child: Container(
               color: Colors.black,
-              child: PhotoView(
-                imageProvider: CachedNetworkImageProvider(imageUrl),
-                minScale: PhotoViewComputedScale.contained,
-                maxScale: PhotoViewComputedScale.covered * 3.0,
-                backgroundDecoration: const BoxDecoration(color: Colors.black),
-                loadingBuilder: (context, event) => Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CircularProgressIndicator(color: Color(0xFFF59E0B)),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Loading TradingView Chart Screenshot...',
-                        style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
+              child: imageUrl != null
+                  ? PhotoView(
+                      imageProvider: CachedNetworkImageProvider(imageUrl),
+                      minScale: PhotoViewComputedScale.contained,
+                      maxScale: PhotoViewComputedScale.covered * 3.0,
+                      backgroundDecoration: const BoxDecoration(color: Colors.black),
+                      loadingBuilder: (context, event) => Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(color: Color(0xFFF59E0B)),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Loading TradingView Chart Screenshot...',
+                              style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
-                ),
-                errorBuilder: (context, error, stackTrace) => Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.broken_image, color: Colors.redAccent, size: 48),
-                      const SizedBox(height: 8),
-                      Text('Screenshot unavailable: $error', style: const TextStyle(color: Colors.white60)),
-                    ],
-                  ),
-                ),
-              ),
+                      errorBuilder: (context, error, stackTrace) => _buildFallbackChartCard(),
+                    )
+                  : _buildFallbackChartCard(),
             ),
           ),
 
@@ -155,7 +196,9 @@ class ScreenshotViewerScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        event.displayName.isNotEmpty ? event.displayName : (event.symbol.isNotEmpty ? event.symbol : 'Multi-Asset Terminal'),
+                        _currentEvent.displayName.isNotEmpty
+                            ? _currentEvent.displayName
+                            : (_currentEvent.symbol.isNotEmpty ? _currentEvent.symbol : 'Multi-Asset Terminal'),
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                       ),
                       Container(
@@ -173,14 +216,14 @@ class ScreenshotViewerScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    dateFormat.format(event.timestamp),
+                    dateFormat.format(_currentEvent.timestamp),
                     style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 11, fontFamily: 'monospace'),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    event.triggerReason.isNotEmpty
-                        ? event.triggerReason
-                        : '${event.displayName.isNotEmpty ? event.displayName : (event.symbol.isNotEmpty ? event.symbol : "Asset")} touched ${event.level} @ \$${event.currentPrice.toStringAsFixed(2)}',
+                    _currentEvent.triggerReason.isNotEmpty
+                        ? _currentEvent.triggerReason
+                        : '${_currentEvent.displayName.isNotEmpty ? _currentEvent.displayName : (_currentEvent.symbol.isNotEmpty ? _currentEvent.symbol : "Asset")} touched ${_currentEvent.level} @ \$${_currentEvent.currentPrice.toStringAsFixed(2)}',
                     style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 12),
                   ),
                 ],
@@ -188,6 +231,54 @@ class ScreenshotViewerScreen extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildFallbackChartCard() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F172A),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF1E293B)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.candlestick_chart_outlined, color: Color(0xFFF59E0B), size: 48),
+              const SizedBox(height: 12),
+              Text(
+                '${_currentEvent.symbol} PRICE TOUCH EVENT',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Price @ \$${_currentEvent.currentPrice.toStringAsFixed(2)} (Target: \$${_currentEvent.levelPrice.toStringAsFixed(2)})',
+                style: const TextStyle(color: Color(0xFFFBBF24), fontFamily: 'monospace', fontSize: 13, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 14),
+              ElevatedButton.icon(
+                icon: _isCapturing
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                    : const Icon(Icons.camera_alt, color: Colors.black, size: 16),
+                label: Text(
+                  _isCapturing ? 'GENERATING CHART...' : 'CAPTURE CHART NOW',
+                  style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 12),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFF59E0B),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _isCapturing ? null : _handleCaptureFreshChart,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

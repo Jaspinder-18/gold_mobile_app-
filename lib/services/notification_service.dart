@@ -17,9 +17,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   debugPrint('[FCM Background] Remote message received: ${message.messageId}, data: ${message.data}');
 
   try {
-    // Show high priority loud notification when app is in background/killed
-    final notificationService = NotificationService();
-    await notificationService.initialize();
+    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const initSettings = InitializationSettings(android: androidSettings);
+    await flutterLocalNotificationsPlugin.initialize(initSettings);
 
     final data = message.data;
     final symbol = data['symbol']?.toString() ?? 'XAUUSD';
@@ -28,25 +29,48 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     final level = data['level']?.toString() ?? 'CUSTOM';
     final screenshotUrl = data['screenshotUrl']?.toString() ?? '';
 
-    final event = AlertEvent(
-      id: data['alertId']?.toString() ?? 'fcm_${DateTime.now().millisecondsSinceEpoch}',
-      symbol: symbol,
-      displayName: '$symbol Spot',
-      level: level,
-      levelPrice: targetPrice,
-      currentPrice: currentPrice,
-      tolerance: 0.20,
-      screenshotPath: screenshotUrl,
-      triggerReason: message.notification?.body ?? '$symbol touched target price @ \$$currentPrice',
-      telegramStatus: 'SENT',
-      timestamp: DateTime.now(),
-      isTest: false,
+    final isCustom = level.toUpperCase() == 'CUSTOM';
+    final title = message.notification?.title ?? (isCustom
+        ? '🚨 $symbol TOUCHED TARGET @ \$${currentPrice.toStringAsFixed(2)}'
+        : '🚨 $symbol TOUCHED $level @ \$${currentPrice.toStringAsFixed(2)}');
+    final body = message.notification?.body ?? (isCustom
+        ? 'Target: \$${targetPrice.toStringAsFixed(2)} · Price Alert Triggered · Tap to view chart'
+        : 'Target: \$${targetPrice.toStringAsFixed(2)} · Price Level Alert');
+
+    final notificationId = (level.hashCode ^ symbol.hashCode ^ (DateTime.now().second)).abs() % 100000;
+
+    final androidDetails = AndroidNotificationDetails(
+      'gold_alarm_channel_v4',
+      '🚨 High Priority Price Level Alarms',
+      channelDescription: 'Loud alarm clock notifications for market price touches',
+      importance: Importance.max,
+      priority: Priority.max,
+      fullScreenIntent: true,
+      playSound: true,
+      sound: const RawResourceAndroidNotificationSound('alarm_clock'),
+      enableVibration: true,
+      vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+      enableLights: true,
+      category: AndroidNotificationCategory.alarm,
+      audioAttributesUsage: AudioAttributesUsage.alarm,
+      visibility: NotificationVisibility.public,
+      styleInformation: BigTextStyleInformation(
+        body,
+        contentTitle: title,
+        summaryText: '$symbol Alert Terminal',
+      ),
     );
 
-    await notificationService.showAlertNotification(event);
-    try { AudioService().playAlertSound(); } catch (_) {}
+    final details = NotificationDetails(android: androidDetails);
+    await flutterLocalNotificationsPlugin.show(
+      notificationId,
+      title,
+      body,
+      details,
+      payload: screenshotUrl.isNotEmpty ? screenshotUrl : (data['alertId'] ?? ''),
+    );
   } catch (e) {
-    debugPrint('[FCM Background] Handler error: $e');
+    debugPrint('[FCM Background] Error in background handler: $e');
   }
 }
 

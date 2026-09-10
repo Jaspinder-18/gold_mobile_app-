@@ -13,36 +13,54 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Set system UI to immersive dark
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Color(0xFF070A12),
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
+  try {
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarColor: Color(0xFF070A12),
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+    );
+  } catch (_) {}
 
-  // Initialize Firebase Core with multi-platform options
+  // Initialize Firebase Core safely without blocking UI
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
-    );
-  } catch (e) {
+    ).timeout(const Duration(seconds: 3));
+
     try {
-      await Firebase.initializeApp();
-    } catch (_) {}
+      FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    } catch (fcmErr) {
+      debugPrint('[Main] FCM background handler note: $fcmErr');
+    }
+  } catch (fbErr) {
+    debugPrint('[Main] Firebase Core init note (continuing smoothly): $fbErr');
   }
 
-  // Register high-priority background/terminated FCM push notification handler
-  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  // Fast audio service initialization
+  try {
+    await AudioService().initialize().timeout(const Duration(seconds: 2));
+  } catch (_) {}
 
-  // Initialize Core Services
-  await AudioService().initialize();
-  await NotificationService().initialize();
-  await BackgroundService().initialize();
-  await SocketService().initialize();
-
+  // Launch UI immediately so the user NEVER gets stuck on a black screen!
   runApp(const GoldAlertApp());
+
+  // Spin up asynchronous network, notification, and background tasks in parallel
+  Future.microtask(() async {
+    try {
+      await NotificationService().initialize().timeout(const Duration(seconds: 3));
+    } catch (_) {}
+
+    try {
+      await BackgroundService().initialize().timeout(const Duration(seconds: 3));
+    } catch (_) {}
+
+    try {
+      await SocketService().initialize();
+    } catch (_) {}
+  });
 }
 
 class GoldAlertApp extends StatelessWidget {

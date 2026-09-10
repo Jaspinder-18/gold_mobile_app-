@@ -62,14 +62,14 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     _progressController.forward();
 
     try {
-      await SocketService().fetchInitialData();
+      await SocketService().fetchInitialData().timeout(const Duration(milliseconds: 1500));
     } catch (_) {}
 
     try {
-      await NotificationService().requestPermissions();
+      await NotificationService().requestPermissions().timeout(const Duration(milliseconds: 1000));
     } catch (_) {}
 
-    await Future.delayed(const Duration(milliseconds: 2700));
+    await Future.delayed(const Duration(milliseconds: 2200));
 
     if (mounted) {
       Navigator.of(context).pushReplacement(

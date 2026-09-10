@@ -43,11 +43,11 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyD-placeholder-key-for-android-fcm',
-    appId: '1:114409035526:android:b2089e9f93539281a70014',
-    messagingSenderId: '114409035526',
+    apiKey: 'AIzaSyBuFzYj56GNPcUsm38DHQ92fsPxivq5gic',
+    appId: '1:309157910778:android:6de9f4b8809a9c1e34d143',
+    messagingSenderId: '309157910778',
     projectId: 'telichat-4c031',
-    storageBucket: 'telichat-4c031.appspot.com',
+    storageBucket: 'telichat-4c031.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
