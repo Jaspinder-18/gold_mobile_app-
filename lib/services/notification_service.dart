@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
@@ -309,7 +310,7 @@ class NotificationService {
     }
   }
 
-  /// Request runtime permissions on Android 13+ (API 33+) & iOS
+  /// Request runtime permissions on Android 13+ (API 33+) & iOS, and request battery optimization bypass
   Future<bool> requestPermissions() async {
     try {
       final androidImpl = _notificationsPlugin.resolvePlatformSpecificImplementation<
@@ -317,6 +318,15 @@ class NotificationService {
       if (androidImpl != null) {
         final granted = await androidImpl.requestNotificationsPermission();
         _hasPermission = granted ?? false;
+
+        // Automatically request ignoring battery optimization to bypass Android Doze mode
+        try {
+          final isIgnoring = await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+          if (!isIgnoring) {
+            await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+          }
+        } catch (_) {}
+
         return _hasPermission;
       }
 
@@ -335,6 +345,51 @@ class NotificationService {
       debugPrint('[NotificationService] requestPermissions error: $e');
     }
     return false;
+  }
+
+  /// Check if the app is already exempt from battery optimization
+  Future<bool> isIgnoringBatteryOptimizations() async {
+    try {
+      return await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Request prompt to disable battery optimization for 24/7 background alerts
+  Future<bool> requestIgnoreBatteryOptimization() async {
+    try {
+      return await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Open system battery optimization settings page
+  Future<bool> openIgnoreBatteryOptimizationSettings() async {
+    try {
+      return await FlutterForegroundTask.openIgnoreBatteryOptimizationSettings();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Check if overlay permission (draw over other apps / pop-up on lock screen) is granted
+  Future<bool> canDrawOverlays() async {
+    try {
+      return await FlutterForegroundTask.canDrawOverlays;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Open system overlay / pop-up window settings
+  Future<bool> openSystemAlertWindowSettings() async {
+    try {
+      return await FlutterForegroundTask.openSystemAlertWindowSettings();
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> showAlertNotification(AlertEvent event) async {

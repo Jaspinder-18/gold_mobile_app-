@@ -73,18 +73,20 @@ class BackgroundService {
   Future<void> initialize() async {
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'gold_alarm_channel_v4',
-        channelName: '🚨 High Priority Price Level Alarms',
-        channelDescription: 'Real-time background price monitoring and high priority custom price alerts',
-        channelImportance: NotificationChannelImportance.HIGH,
-        priority: NotificationPriority.HIGH,
+        channelId: 'gold_bg_service_channel_silent',
+        channelName: '📊 Background Market Service',
+        channelDescription: 'Maintains live background connection for price monitoring',
+        channelImportance: NotificationChannelImportance.LOW,
+        priority: NotificationPriority.LOW,
+        playSound: false,
+        enableVibration: false,
       ),
       iosNotificationOptions: const IOSNotificationOptions(
-        showNotification: true,
-        playSound: true,
+        showNotification: false,
+        playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(3000), // Check every 3s in background
+        eventAction: ForegroundTaskEventAction.repeat(30000), // Check every 30s silently in background
         autoRunOnBoot: true,
         allowWakeLock: true,
         allowWifiLock: true,
@@ -112,10 +114,10 @@ class BackgroundService {
 
       await FlutterForegroundTask.startService(
         serviceId: 256,
-        notificationTitle: '🚨 Gold & Multi-Asset Terminal',
+        notificationTitle: '📊 ALERT Terminal Service Active',
         notificationText: enabled && targetPrice > 0
-            ? '$symbol Target: \$${targetPrice.toStringAsFixed(2)} (ACTIVE MONITORING)'
-            : 'Live Market Monitoring Active',
+            ? '$symbol Target: \$${targetPrice.toStringAsFixed(2)} (Active Monitoring)'
+            : '$symbol Live Market Monitoring Active',
         callback: startCallback,
       );
 

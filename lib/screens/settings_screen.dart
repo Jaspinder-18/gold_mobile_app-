@@ -288,7 +288,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           const SizedBox(height: 14),
 
-          // 5. SERVER DIAGNOSTICS & PING TEST
+          // 5. ANDROID BACKGROUND & BATTERY SECURITY BYPASS
+          _buildSectionHeader('⚡ ANDROID BACKGROUND & BATTERY BYPASS (24/7 ALARMS)'),
+          _buildAndroidSecurityBypassCard(),
+
+          const SizedBox(height: 14),
+
+          // 6. SERVER DIAGNOSTICS & PING TEST
           _buildSectionHeader('🌐 BACKEND SERVER & DIAGNOSTICS'),
           _buildServerDiagnosticsCard(),
 
@@ -1061,6 +1067,129 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildAndroidSecurityBypassCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.shield_outlined, color: Color(0xFFF59E0B), size: 18),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Android 24/7 Background & Lock Screen Bypass',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Ensure loud alarms ring even when the screen is locked, the app is completely closed, or Xiaomi/POCO battery saver is active.',
+            style: TextStyle(color: Colors.white60, fontSize: 10.5, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+
+          // 1. Battery Saver Exemption Button
+          ElevatedButton.icon(
+            icon: const Icon(Icons.battery_saver, color: Colors.black, size: 16),
+            label: const Text(
+              'DISABLE BATTERY OPTIMIZATION (DOZE MODE)',
+              style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF59E0B),
+              minimumSize: const Size(double.infinity, 40),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () async {
+              await _notificationService.requestIgnoreBatteryOptimization();
+              await _notificationService.openIgnoreBatteryOptimizationSettings();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    backgroundColor: Color(0xFF10B981),
+                    content: Text('✓ Set Battery Saver to "No Restrictions" for 24/7 background alerts.'),
+                  ),
+                );
+              }
+            },
+          ),
+
+          const SizedBox(height: 8),
+
+          // 2. Lock Screen Pop-Up Windows Button
+          OutlinedButton.icon(
+            icon: const Icon(Icons.picture_in_picture_alt, color: Color(0xFFF59E0B), size: 16),
+            label: const Text(
+              'ALLOW POP-UP WINDOWS / OVERLAY ON LOCK SCREEN',
+              style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 10.5),
+            ),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFFF59E0B)),
+              minimumSize: const Size(double.infinity, 38),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () async {
+              await _notificationService.openSystemAlertWindowSettings();
+            },
+          ),
+
+          const SizedBox(height: 10),
+
+          // Xiaomi / POCO Checklist
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF070A12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF1E293B)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.amberAccent, size: 14),
+                    SizedBox(width: 6),
+                    Text('POCO / Xiaomi / Samsung Checklist:', style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 11)),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                _buildChecklistItem('1. Enable "Autostart" in App Info settings.'),
+                _buildChecklistItem('2. Set Battery Saver to "No Restrictions".'),
+                _buildChecklistItem('3. Allow "Display pop-up windows while running in background".'),
+                _buildChecklistItem('4. Allow "Show on Lock screen" notifications.'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChecklistItem(String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('• ', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 12, fontWeight: FontWeight.bold)),
+          Expanded(
+            child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6, left: 4),
@@ -1076,3 +1205,4 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
+
