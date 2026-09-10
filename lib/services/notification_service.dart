@@ -243,6 +243,22 @@ class NotificationService {
         }
       });
 
+      // When app opened from TERMINATED / FULLY CLOSED state via notification tap
+      try {
+        final initialMsg = await messaging.getInitialMessage();
+        if (initialMsg != null) {
+          debugPrint('[NotificationService] App launched from terminated state via FCM: ${initialMsg.data}');
+          final payload = initialMsg.data['screenshotUrl'] ?? initialMsg.data['alertId'];
+          if (payload != null) {
+            Future.delayed(const Duration(milliseconds: 600), () {
+              onNotificationTap?.call(payload.toString());
+            });
+          }
+        }
+      } catch (e) {
+        debugPrint('[NotificationService] getInitialMessage error: $e');
+      }
+
       FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
     } catch (e) {
       debugPrint('[NotificationService] Firebase Messaging init exception: $e');

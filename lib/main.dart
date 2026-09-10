@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'firebase_options.dart';
 import 'screens/splash_screen.dart';
 import 'services/audio_service.dart';
 import 'services/notification_service.dart';
@@ -18,6 +21,20 @@ void main() async {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
+
+  // Initialize Firebase Core with multi-platform options
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    try {
+      await Firebase.initializeApp();
+    } catch (_) {}
+  }
+
+  // Register high-priority background/terminated FCM push notification handler
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   // Initialize Core Services
   await AudioService().initialize();
