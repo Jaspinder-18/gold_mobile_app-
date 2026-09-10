@@ -95,6 +95,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (mounted) setState(() => _alerts = alerts);
     };
 
+    _socketService.onActiveAlertsUpdate = (activeList) {
+      if (mounted) setState(() {});
+    };
+
     _socketService.onLevelStatesUpdate = (states) {
       if (mounted) setState(() {});
     };
@@ -412,15 +416,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     setState(() => _isSavingCustomAlert = true);
 
-    final ok = await _socketService.setCustomPriceAlert(
+    final ok = await _socketService.createCustomAlert(
       targetPrice: targetVal,
-      enabled: true,
+      condition: 'ANY',
     );
 
     if (mounted) {
       setState(() {
         _isSavingCustomAlert = false;
         _isEditingActiveTarget = false;
+        if (ok) {
+          _customTargetPriceController.clear();
+        }
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -432,8 +439,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               Expanded(
                 child: Text(
                   ok
-                      ? '✓ CUSTOM ALERT ACTIVE: Target \$${targetVal.toStringAsFixed(2)}'
-                      : 'Failed to set custom price alert. Check connection.',
+                      ? '✓ TARGET ARMED: \$${targetVal.toStringAsFixed(2)}'
+                      : 'Failed to set price alert. Check connection.',
                   style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
                 ),
               ),
@@ -445,9 +452,26 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+  Future<void> _handleDeleteAlert(String alertId) async {
+    final ok = await _socketService.deleteCustomAlertById(alertId);
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: ok ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+          content: Text(
+            ok ? '✓ Target Alert Removed' : 'Failed to delete alert.',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   Future<void> _handleCancelAlert() async {
     setState(() => _isSavingCustomAlert = true);
-    final ok = await _socketService.deleteCustomPriceAlert();
+    final ok = await _socketService.clearAllCustomAlerts();
     if (mounted) {
       setState(() {
         _customTargetPriceController.clear();
@@ -458,7 +482,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         SnackBar(
           backgroundColor: ok ? const Color(0xFF10B981) : const Color(0xFFEF4444),
           content: Text(
-            ok ? '✓ Custom Alert Cancelled. Monitoring stopped.' : 'Failed to cancel alert.',
+            ok ? '✓ All Custom Alerts Cleared.' : 'Failed to clear alerts.',
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
         ),
@@ -845,27 +869,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildCustomPriceSection(double currentPrice) {
-    final isEnabled = _config.customPriceAlertEnabled;
-    final targetPrice = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? _config.customPriceAlertTarget;
-    final distance = (currentPrice - targetPrice).abs();
-    final customState = _socketService.levelStates['CUSTOM'] ?? 'INACTIVE';
-    final isTriggered = customState == 'TRIGGERED';
-    final isActive = isEnabled && targetPrice > 0 && !isTriggered;
-    final isAbove = targetPrice > currentPrice;
-    final distancePercent = currentPrice > 0 ? (distance / currentPrice) * 100 : 0.0;
-
-    if (isTriggered) {
-      return _buildTriggeredAlertCard(targetPrice, currentPrice);
-    } else if (isActive && !_isEditingActiveTarget) {
-      return _buildActiveAlertCard(targetPrice, currentPrice, distance, distancePercent, isAbove);
-    } else {
-      return _buildSetCustomPriceCard(currentPrice, targetPrice, distance, distancePercent, isAbove, isActive);
-    }
-  }
-
-  /// CARD 1: Redesigned Set Custom Price Input Card
-  Widget _buildSetCustomPriceCard(double currentPrice, double targetPrice, double distance, double distancePercent, bool isAbove, bool wasActive) {
+    final activeList = _socketService.activeAlerts;
     final assetType = _socketService.activeSymbolConfig?.assetType ?? 'COMMODITY';
+
     List<double> increments;
     if (assetType == 'CRYPTO') {
       increments = [50.0, 100.0, 500.0];
@@ -894,6 +900,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header Bar
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -908,62 +915,100 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     child: const Icon(Icons.add_alert, color: Color(0xFFF59E0B), size: 18),
                   ),
                   const SizedBox(width: 8),
-                  const Column(
+                  Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'SET CUSTOM PRICE ALERT',
+                      const Text(
+                        'MULTI-ALERT ENGINE',
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5),
                       ),
                       Text(
-                        'Alert rings automatically when live price touches target',
-                        style: TextStyle(color: Colors.white54, fontSize: 10),
+                        'Auto-removes on price touch · Push notified',
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 9.5),
                       ),
                     ],
                   ),
                 ],
               ),
-              if (_isEditingActiveTarget)
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white60, size: 18),
-                  onPressed: () => setState(() => _isEditingActiveTarget = false),
-                  tooltip: 'Cancel Edit',
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: activeList.isNotEmpty
+                      ? const Color(0xFF10B981).withValues(alpha: 0.2)
+                      : const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: activeList.isNotEmpty ? const Color(0xFF10B981) : Colors.white24,
+                  ),
                 ),
+                child: Text(
+                  '${activeList.length} ACTIVE',
+                  style: TextStyle(
+                    color: activeList.isNotEmpty ? const Color(0xFF10B981) : Colors.white60,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
             ],
           ),
 
           const SizedBox(height: 12),
 
-          // Large Custom Price Input Field
-          TextField(
-            controller: _customTargetPriceController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            style: const TextStyle(
-              color: Colors.white,
-              fontFamily: 'monospace',
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.5,
-            ),
-            decoration: InputDecoration(
-              labelText: 'CUSTOM TARGET PRICE',
-              labelStyle: const TextStyle(color: Color(0xFFF59E0B), fontSize: 12, fontWeight: FontWeight.bold),
-              prefixText: '\$ ',
-              prefixStyle: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.w900, fontSize: 20),
-              hintText: '3450.50',
-              hintStyle: const TextStyle(color: Colors.white24),
-              filled: true,
-              fillColor: const Color(0xFF070A12),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF1E293B))),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFFF59E0B), width: 1.5)),
-            ),
-            onChanged: (_) => setState(() {}),
+          // Input Row (Target Price Input & Add Button)
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _customTargetPriceController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontFamily: 'monospace',
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: 'ADD TARGET PRICE',
+                    labelStyle: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold),
+                    prefixText: '\$ ',
+                    prefixStyle: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.w900, fontSize: 16),
+                    hintText: currentPrice > 0 ? currentPrice.toStringAsFixed(2) : '0.00',
+                    hintStyle: const TextStyle(color: Colors.white24),
+                    filled: true,
+                    fillColor: const Color(0xFF070A12),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFF1E293B))),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Color(0xFFF59E0B), width: 1.5)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: 48,
+                child: ElevatedButton.icon(
+                  icon: _isSavingCustomAlert
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                      : const Icon(Icons.add, color: Colors.black, size: 18),
+                  label: Text(
+                    _isSavingCustomAlert ? 'ADDING...' : 'ADD',
+                    style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 12),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF59E0B),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                  ),
+                  onPressed: _isSavingCustomAlert ? null : _handleSetCustomPrice,
+                ),
+              ),
+            ],
           ),
 
           const SizedBox(height: 8),
 
-          // Quick Increment / Current Price adjustment pills
+          // Quick Increment Pills
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
@@ -981,11 +1026,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(color: const Color(0xFFF59E0B)),
                     ),
-                    child: const Row(
+                    child: Row(
                       children: [
-                        Icon(Icons.flash_on, color: Color(0xFFF59E0B), size: 12),
-                        SizedBox(width: 2),
-                        Text('CURRENT PRICE', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 9.5, fontWeight: FontWeight.w900)),
+                        const Icon(Icons.flash_on, color: Color(0xFFF59E0B), size: 12),
+                        const SizedBox(width: 2),
+                        Text('LIVE (\$${currentPrice.toStringAsFixed(2)})', style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 9.5, fontWeight: FontWeight.w900)),
                       ],
                     ),
                   ),
@@ -1003,327 +1048,117 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
 
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
 
-          // Target vs Live & Distance Direction Preview
-          if (targetPrice > 0)
+          // Active Alerts List
+          if (activeList.isEmpty)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
               decoration: BoxDecoration(
                 color: const Color(0xFF070A12),
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: const Color(0xFF1E293B)),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('LIVE PRICE: \$${currentPrice.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white60, fontSize: 10, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 2),
-                      Text(
-                        isAbove ? '↗ TARGET ABOVE CURRENT PRICE' : '↘ TARGET BELOW CURRENT PRICE',
-                        style: TextStyle(
-                          color: isAbove ? const Color(0xFF10B981) : const Color(0xFF60A5FA),
-                          fontWeight: FontWeight.w900,
-                          fontSize: 10,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text('DISTANCE: \$${distance.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.w900, fontFamily: 'monospace')),
-                      Text('${isAbove ? '+' : '-'}${distancePercent.toStringAsFixed(2)}%', style: TextStyle(color: isAbove ? const Color(0xFF10B981) : const Color(0xFF60A5FA), fontSize: 9.5, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-          const SizedBox(height: 12),
-
-          // Prominent SET CUSTOM PRICE Button
-          SizedBox(
-            width: double.infinity,
-            height: 46,
-            child: ElevatedButton.icon(
-              icon: _isSavingCustomAlert
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                  : const Icon(Icons.check_circle, color: Colors.black, size: 20),
-              label: Text(
-                _isSavingCustomAlert ? 'ACTIVATING ALERT...' : 'SET CUSTOM PRICE',
-                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 14, letterSpacing: 0.5),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFF59E0B),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                elevation: 4,
-              ),
-              onPressed: _isSavingCustomAlert ? null : _handleSetCustomPrice,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// CARD 2: Professional Active Alert Card
-  Widget _buildActiveAlertCard(double targetPrice, double currentPrice, double distance, double distancePercent, bool isAbove) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF10B981), width: 1.8),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF10B981).withValues(alpha: 0.16),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header with Pulsing Active Dot
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF10B981),
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(color: const Color(0xFF10B981).withValues(alpha: 0.6), blurRadius: 8, spreadRadius: 2),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'CUSTOM PRICE ALERT',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5),
-                  ),
-                ],
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF10B981).withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: const Color(0xFF10B981)),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('● ACTIVE', style: TextStyle(color: Color(0xFF10B981), fontSize: 10, fontWeight: FontWeight.w900)),
-                  ],
+              child: const Center(
+                child: Text(
+                  'No active price alerts. Enter target prices above.',
+                  style: TextStyle(color: Colors.white38, fontSize: 11),
                 ),
               ),
-            ],
-          ),
-
-          const SizedBox(height: 12),
-
-          // 4-Grid Key Metrics
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFF070A12),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFF1E293B)),
-            ),
-            child: Column(
+            )
+          else ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('TARGET PRICE', style: TextStyle(color: Colors.white54, fontSize: 9.5, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 2),
-                        Text(
-                          '\$${targetPrice.toStringAsFixed(2)}',
-                          style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 20, fontWeight: FontWeight.w900, fontFamily: 'monospace'),
-                        ),
-                      ],
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        const Text('LIVE PRICE', style: TextStyle(color: Colors.white54, fontSize: 9.5, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 2),
-                        Text(
-                          '\$${currentPrice.toStringAsFixed(2)}',
-                          style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w900, fontFamily: 'monospace'),
-                        ),
-                      ],
-                    ),
-                  ],
+                const Text(
+                  'ACTIVE TARGETS (Auto-removes on hit):',
+                  style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 8),
-                const Divider(color: Color(0xFF1E293B), height: 1),
-                const SizedBox(height: 8),
-                Row(
+                if (activeList.length > 1)
+                  InkWell(
+                    onTap: _handleCancelAlert,
+                    child: const Text(
+                      'CLEAR ALL',
+                      style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            ...activeList.map((alertItem) {
+              final target = alertItem.targetPrice;
+              final diff = currentPrice - target;
+              final absDiff = diff.abs();
+              final isAbove = diff > 0;
+              final pct = currentPrice > 0 ? (absDiff / currentPrice) * 100 : 0.0;
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF070A12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF1E293B)),
+                ),
+                child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Row(
                       children: [
-                        Icon(isAbove ? Icons.arrow_upward : Icons.arrow_downward, size: 14, color: isAbove ? const Color(0xFF10B981) : const Color(0xFF60A5FA)),
-                        const SizedBox(width: 4),
+                        Icon(
+                          isAbove ? Icons.arrow_downward : Icons.arrow_upward,
+                          size: 14,
+                          color: isAbove ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                        ),
+                        const SizedBox(width: 6),
                         Text(
-                          isAbove ? 'TARGET ABOVE PRICE' : 'TARGET BELOW PRICE',
-                          style: TextStyle(
-                            color: isAbove ? const Color(0xFF10B981) : const Color(0xFF60A5FA),
-                            fontSize: 10,
+                          '\$${target.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
                             fontWeight: FontWeight.w900,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                        if (alertItem.note.isNotEmpty) ...[
+                          const SizedBox(width: 6),
+                          Text(
+                            '· ${alertItem.note}',
+                            style: const TextStyle(color: Colors.white38, fontSize: 10),
+                          ),
+                        ],
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        Text(
+                          '${isAbove ? '-' : '+'}\$${absDiff.toStringAsFixed(2)} (${pct.toStringAsFixed(2)}%)',
+                          style: TextStyle(
+                            color: isAbove ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        InkWell(
+                          onTap: () => _handleDeleteAlert(alertItem.id),
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEF4444).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Icon(Icons.close, color: Color(0xFFEF4444), size: 14),
                           ),
                         ),
                       ],
                     ),
-                    Text(
-                      'DISTANCE: \$${distance.toStringAsFixed(2)} (${distancePercent.toStringAsFixed(2)}%)',
-                      style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
-                    ),
                   ],
                 ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 10),
-
-          // Monitoring status text
-          const Row(
-            children: [
-              Icon(Icons.security, color: Color(0xFF10B981), size: 13),
-              SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  'Continuous background monitoring active (Lock-screen & closed app ready)',
-                  style: TextStyle(color: Colors.white54, fontSize: 9.5),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 12),
-
-          // Action buttons (CANCEL ALERT & EDIT TARGET)
-          Row(
-            children: [
-              Expanded(
-                flex: 2,
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.close, size: 16, color: Colors.white),
-                  label: const Text('CANCEL ALERT', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFDC2626),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: _isSavingCustomAlert ? null : _handleCancelAlert,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                flex: 1,
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFF59E0B)),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: () {
-                    setState(() => _isEditingActiveTarget = true);
-                  },
-                  child: const Text('EDIT', style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 12)),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// CARD 3: Triggered State Card
-  Widget _buildTriggeredAlertCard(double targetPrice, double currentPrice) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF450A0A).withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFEF4444), width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFEF4444).withValues(alpha: 0.25),
-            blurRadius: 18,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Row(
-                children: [
-                  Icon(Icons.crisis_alert, color: Color(0xFFEF4444), size: 20),
-                  SizedBox(width: 8),
-                  Text(
-                    '🎯 CUSTOM TARGET TOUCHED!',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 14),
-                  ),
-                ],
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEF4444),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text('TRIGGERED', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Target \$${targetPrice.toStringAsFixed(2)} was reached at \$${currentPrice.toStringAsFixed(2)}.',
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.add_alert, size: 14, color: Colors.black),
-                  label: const Text('SET NEW TARGET', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFF59E0B),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      _isEditingActiveTarget = true;
-                    });
-                  },
-                ),
-              ),
-            ],
-          ),
+              );
+            }),
+          ],
         ],
       ),
     );
@@ -1348,7 +1183,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           label,
           style: TextStyle(
             color: delta > 0 ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-            fontSize: 9,
+            fontSize: 9.5,
             fontWeight: FontWeight.bold,
             fontFamily: 'monospace',
           ),

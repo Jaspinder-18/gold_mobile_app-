@@ -9,32 +9,13 @@ import 'audio_service.dart';
 import 'notification_service.dart';
 import 'background_service.dart';
 
-double _asDouble(dynamic val, [double fallback = 0.0]) {
-  if (val == null) return fallback;
-  if (val is num) return val.toDouble();
-  if (val is String) return double.tryParse(val) ?? fallback;
-  return fallback;
-}
-
-bool _asBool(dynamic val, [bool fallback = false]) {
-  if (val == null) return fallback;
-  if (val is bool) return val;
-  if (val is String) {
-    final lower = val.toLowerCase().trim();
-    if (lower == 'true' || lower == '1' || lower == 'yes') return true;
-    if (lower == 'false' || lower == '0' || lower == 'no') return false;
-  }
-  if (val is num) return val != 0;
-  return fallback;
-}
-
 class SocketService with WidgetsBindingObserver {
   static final SocketService _instance = SocketService._internal();
   factory SocketService() => _instance;
   SocketService._internal() {
     WidgetsBinding.instance.addObserver(this);
-    // Heartbeat & continuous sync timer (every 4 seconds)
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+    // Heartbeat & continuous sync timer (every 5 seconds)
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _checkHealthAndSync();
     });
   }
@@ -43,7 +24,6 @@ class SocketService with WidgetsBindingObserver {
   String _serverUrl = 'https://gold-server-dbbq.onrender.com';
   bool _isConnected = false;
   Timer? _heartbeatTimer;
-  double? _lastEvaluatedPrice;
 
   // Anti-duplicate alert debounce cache: debounceKey -> timestamp
   final Map<String, int> _recentAlertTimestamps = {};
@@ -54,6 +34,7 @@ class SocketService with WidgetsBindingObserver {
   PivotStateModel? activePivotState;
   String activeSymbol = 'XAUUSD';
   List<AlertEvent> recentAlerts = [];
+  List<PriceAlertModel> activeAlerts = [];
   Map<String, String> levelStates = {
     'R3': 'READY',
     'R2': 'READY',
@@ -68,6 +49,7 @@ class SocketService with WidgetsBindingObserver {
   Function(bool)? onConnectionChange;
   Function(PivotConfig)? onConfigUpdate;
   Function(List<AlertEvent>)? onAlertsUpdate;
+  Function(List<PriceAlertModel>)? onActiveAlertsUpdate;
   Function(Map<String, String>)? onLevelStatesUpdate;
   Function(String, SymbolModel?, PivotStateModel?)? onSymbolUpdate;
 
@@ -89,7 +71,7 @@ class SocketService with WidgetsBindingObserver {
     _syncLatestAlertsFromBackend();
   }
 
-  /// High-reliability background sync to catch any trigger even during socket reconnects
+  /// Background sync to ensure alerts are up-to-date
   Future<void> _syncLatestAlertsFromBackend() async {
     try {
       final alertsRes = await http.get(Uri.parse('$_serverUrl/api/alerts?limit=3')).timeout(const Duration(seconds: 4));
@@ -98,24 +80,6 @@ class SocketService with WidgetsBindingObserver {
         if (body['data'] != null && body['data'] is List) {
           final list = (body['data'] as List).map((i) => AlertEvent.fromJson(Map<String, dynamic>.from(i))).toList();
           if (list.isNotEmpty) {
-            final newest = list.first;
-            final now = DateTime.now().millisecondsSinceEpoch;
-            final alertTime = newest.timestamp.millisecondsSinceEpoch;
-            final ageMs = (now - alertTime).abs();
-
-            // If alert triggered within last 45 seconds and has not been alarmed on this device
-            final debounceKey = '${newest.symbol}_${newest.level}';
-            final lastTrigger = _recentAlertTimestamps[debounceKey] ?? 0;
-            if (ageMs < 45000 && (now - lastTrigger) > 15000) {
-              _recentAlertTimestamps[debounceKey] = now;
-              _recentAlertTimestamps[newest.id] = now;
-
-              // Dispatch loud alarm sound, notification & dialog
-              onAlertTriggered?.call(newest);
-              try { AudioService().playAlertSound(); } catch (_) {}
-              try { NotificationService().showAlertNotification(newest); } catch (_) {}
-            }
-
             recentAlerts = list.take(6).toList();
             onAlertsUpdate?.call(recentAlerts);
           }
@@ -127,45 +91,16 @@ class SocketService with WidgetsBindingObserver {
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
     _serverUrl = prefs.getString('server_url') ?? 'https://gold-server-dbbq.onrender.com';
-    
-    // Load local custom alert cache
-    final cachedEnabled = prefs.getBool('custom_price_alert_enabled_${activeSymbol.toUpperCase()}');
-    final cachedTarget = prefs.getDouble('custom_price_alert_target_${activeSymbol.toUpperCase()}');
-    if (cachedEnabled != null || cachedTarget != null) {
-      currentConfig = currentConfig.copyWith(
-        customPriceAlertEnabled: cachedEnabled ?? currentConfig.customPriceAlertEnabled,
-        customPriceAlertTarget: cachedTarget ?? currentConfig.customPriceAlertTarget,
-      );
-      if (cachedEnabled == true && (cachedTarget ?? 0) > 0) {
-        levelStates['CUSTOM'] = 'READY';
-      }
-    }
 
+    await NotificationService().initialize(serverUrl: _serverUrl);
     await fetchInitialData();
     connectSocket();
+
     BackgroundService().startService(
       symbol: activeSymbol,
-      targetPrice: currentConfig.customPriceAlertTarget,
-      enabled: currentConfig.customPriceAlertEnabled,
+      targetPrice: activeAlerts.isNotEmpty ? activeAlerts.first.targetPrice : 0.0,
+      enabled: activeAlerts.isNotEmpty,
     );
-  }
-
-  Future<void> _persistCustomAlertState() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('active_symbol', activeSymbol);
-      await prefs.setBool('custom_price_alert_enabled_${activeSymbol.toUpperCase()}', currentConfig.customPriceAlertEnabled);
-      await prefs.setDouble('custom_target_price_${activeSymbol.toUpperCase()}', currentConfig.customPriceAlertTarget);
-      await prefs.setDouble('custom_price_alert_target_${activeSymbol.toUpperCase()}', currentConfig.customPriceAlertTarget);
-
-      BackgroundService().updateCustomAlert(
-        symbol: activeSymbol,
-        targetPrice: currentConfig.customPriceAlertTarget,
-        enabled: currentConfig.customPriceAlertEnabled,
-      );
-    } catch (e) {
-      debugPrint('[SocketService] _persistCustomAlertState error: $e');
-    }
   }
 
   Future<void> updateServerUrl(String newUrl) async {
@@ -175,14 +110,20 @@ class SocketService with WidgetsBindingObserver {
     disconnectSocket();
     await fetchInitialData();
     connectSocket();
+
+    // Re-register FCM token with new server URL
+    final fcmToken = NotificationService().fcmToken;
+    if (fcmToken != null) {
+      NotificationService().registerTokenWithServer(_serverUrl, fcmToken);
+    }
   }
 
   void connectSocket() {
     try {
       _socket?.dispose();
-      
+
       debugPrint('[SocketService] Connecting to $_serverUrl...');
-      
+
       _socket = io.io(
         _serverUrl,
         io.OptionBuilder()
@@ -200,6 +141,12 @@ class SocketService with WidgetsBindingObserver {
         debugPrint('[SocketService] ✓ Connected to Socket.IO Server');
         _isConnected = true;
         onConnectionChange?.call(true);
+
+        // Register FCM token with server upon connection
+        final fcmToken = NotificationService().fcmToken;
+        if (fcmToken != null) {
+          NotificationService().registerTokenWithServer(_serverUrl, fcmToken);
+        }
       });
 
       _socket?.onDisconnect((_) {
@@ -224,9 +171,6 @@ class SocketService with WidgetsBindingObserver {
             final map = Map<String, dynamic>.from(data as Map);
             currentTick = MarketTick.fromJson(map);
             onMarketTick?.call(currentTick!);
-
-            // Local Fail-safe Custom Price Alert evaluation
-            _evaluateLocalCustomPriceTouch(currentTick!);
           } catch (e) {
             debugPrint('[SocketService] handleTick error: $e');
           }
@@ -259,6 +203,12 @@ class SocketService with WidgetsBindingObserver {
               currentConfig = PivotConfig.fromJson(Map<String, dynamic>.from(map['config'] as Map));
               onConfigUpdate?.call(currentConfig);
             }
+            if (map['activeAlerts'] != null && map['activeAlerts'] is List) {
+              activeAlerts = (map['activeAlerts'] as List)
+                  .map((i) => PriceAlertModel.fromJson(Map<String, dynamic>.from(i as Map)))
+                  .toList();
+              onActiveAlertsUpdate?.call(activeAlerts);
+            }
             if (map['alertStates'] != null && map['alertStates'] is Map) {
               final states = Map<String, dynamic>.from(map['alertStates'] as Map);
               states.forEach((k, v) {
@@ -290,6 +240,12 @@ class SocketService with WidgetsBindingObserver {
               currentTick = MarketTick.fromJson(Map<String, dynamic>.from(map['market'] as Map));
               onMarketTick?.call(currentTick!);
             }
+            if (map['activeAlerts'] != null && map['activeAlerts'] is List) {
+              activeAlerts = (map['activeAlerts'] as List)
+                  .map((i) => PriceAlertModel.fromJson(Map<String, dynamic>.from(i as Map)))
+                  .toList();
+              onActiveAlertsUpdate?.call(activeAlerts);
+            }
             onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
           } catch (e) {
             debugPrint('[SocketService] symbol:active error: $e');
@@ -302,14 +258,7 @@ class SocketService with WidgetsBindingObserver {
           try {
             final map = Map<String, dynamic>.from(data as Map);
             currentConfig = PivotConfig.fromJson(map);
-            if (map['customPriceAlertStatus'] != null) {
-              levelStates['CUSTOM'] = map['customPriceAlertStatus'].toString() == 'ACTIVE'
-                  ? 'READY'
-                  : map['customPriceAlertStatus'].toString();
-            }
             onConfigUpdate?.call(currentConfig);
-            onLevelStatesUpdate?.call(levelStates);
-            _persistCustomAlertState();
           } catch (e) {
             debugPrint('[SocketService] config_updated error: $e');
           }
@@ -318,45 +267,33 @@ class SocketService with WidgetsBindingObserver {
       _socket?.on('config_updated', handleConfig);
       _socket?.on('config:update', handleConfig);
 
-      _socket?.on('custom_alert:updated', (data) {
+      // Multi-Alert List Updates
+      void handleAlertListUpdated(dynamic data) {
         if (data != null && data is Map) {
           try {
             final map = Map<String, dynamic>.from(data);
             final sym = map['symbol']?.toString();
             if (sym != null && sym.toUpperCase() != activeSymbol.toUpperCase()) return;
-            final isEn = _asBool(map['customPriceAlertEnabled'] ?? map['customAlert']?['enabled'], false);
-            final tPrice = _asDouble(map['customPriceAlertTarget'] ?? map['customAlert']?['targetPrice'], 0.0);
-            final st = map['customPriceAlertStatus']?.toString() ??
-                map['customAlert']?['status']?.toString() ??
-                (isEn && tPrice > 0 ? 'ACTIVE' : 'INACTIVE');
 
-            currentConfig = currentConfig.copyWith(
-              customPriceAlertEnabled: isEn,
-              customPriceAlertTarget: tPrice,
-              customPriceAlertStatus: st,
-            );
-            levelStates['CUSTOM'] = st == 'ACTIVE' ? 'READY' : st;
-            onConfigUpdate?.call(currentConfig);
-            onLevelStatesUpdate?.call(levelStates);
-            _persistCustomAlertState();
+            if (map['activeAlerts'] != null && map['activeAlerts'] is List) {
+              activeAlerts = (map['activeAlerts'] as List)
+                  .map((i) => PriceAlertModel.fromJson(Map<String, dynamic>.from(i as Map)))
+                  .toList();
+              onActiveAlertsUpdate?.call(activeAlerts);
+            } else {
+              fetchActiveAlerts();
+            }
           } catch (e) {
-            debugPrint('[SocketService] custom_alert:updated error: $e');
+            debugPrint('[SocketService] handleAlertListUpdated error: $e');
           }
         }
-      });
+      }
+      _socket?.on('custom_alert:list_updated', handleAlertListUpdated);
+      _socket?.on('custom_alert:created', handleAlertListUpdated);
+      _socket?.on('custom_alert:deleted', handleAlertListUpdated);
+      _socket?.on('custom_alert:removed', handleAlertListUpdated);
 
-      _socket?.on('custom_alert:deleted', (data) {
-        currentConfig = currentConfig.copyWith(
-          customPriceAlertEnabled: false,
-          customPriceAlertTarget: 0.0,
-          customPriceAlertStatus: 'INACTIVE',
-        );
-        levelStates['CUSTOM'] = 'INACTIVE';
-        onConfigUpdate?.call(currentConfig);
-        onLevelStatesUpdate?.call(levelStates);
-        _persistCustomAlertState();
-      });
-
+      // Single authoritative alert trigger handler
       void handleIncomingAlert(dynamic data) async {
         if (data == null) return;
         try {
@@ -369,13 +306,18 @@ class SocketService with WidgetsBindingObserver {
 
           final event = AlertEvent.fromJson(eventMap);
           final now = DateTime.now().millisecondsSinceEpoch;
-          final debounceKey = '${event.symbol}_${event.level}';
+          final debounceKey = '${event.symbol}_${event.level}_${event.levelPrice.toStringAsFixed(2)}';
           final lastTrigger = _recentAlertTimestamps[debounceKey] ?? 0;
           final isRecentDuplicate = (now - lastTrigger) < 6000;
 
-          debugPrint('[SocketService] 🚨 Level Alert Received: ${event.symbol} ${event.level} @ \$${event.currentPrice} (isDuplicate: $isRecentDuplicate)');
+          debugPrint('[SocketService] 🚨 Price Alert Triggered: ${event.symbol} ${event.level} @ \$${event.currentPrice} (isDuplicate: $isRecentDuplicate)');
 
-          // 1. Update level state indicators if available
+          // 1. Auto-remove triggered alert from active list
+          final alertId = map['alertId']?.toString() ?? event.id;
+          activeAlerts.removeWhere((a) => a.id == alertId || (a.symbol.toUpperCase() == event.symbol.toUpperCase() && (a.targetPrice - event.levelPrice).abs() < 0.01));
+          onActiveAlertsUpdate?.call(activeAlerts);
+
+          // 2. Update level states
           if (map['alertStates'] != null && map['alertStates'] is Map) {
             final states = Map<String, dynamic>.from(map['alertStates'] as Map);
             states.forEach((k, v) {
@@ -385,22 +327,10 @@ class SocketService with WidgetsBindingObserver {
                 levelStates[k] = v.toString();
               }
             });
-          } else {
-            levelStates[event.level] = 'TRIGGERED';
+            onLevelStatesUpdate?.call(levelStates);
           }
 
-          if (event.level.toUpperCase() == 'CUSTOM') {
-            currentConfig = currentConfig.copyWith(
-              customPriceAlertEnabled: false,
-              customPriceAlertStatus: 'TRIGGERED',
-            );
-            levelStates['CUSTOM'] = 'TRIGGERED';
-            _persistCustomAlertState();
-            onConfigUpdate?.call(currentConfig);
-          }
-          onLevelStatesUpdate?.call(levelStates);
-
-          // 2. Update recent alerts list in-place or prepend
+          // 3. Update recent alerts list
           final existingIdx = recentAlerts.indexWhere(
             (a) => a.id == event.id || (a.level == event.level && a.symbol == event.symbol && (now - a.timestamp.millisecondsSinceEpoch).abs() < 25000),
           );
@@ -415,97 +345,25 @@ class SocketService with WidgetsBindingObserver {
           }
           onAlertsUpdate?.call(recentAlerts);
 
-          // 3. If this is a fresh new touch trigger
+          // 4. Trigger UI dialog, audio alarm & push notification (once per touch event)
           if (!isRecentDuplicate) {
             _recentAlertTimestamps[debounceKey] = now;
             _recentAlertTimestamps[event.id] = now;
 
-            // Trigger in-app UI dialog
             onAlertTriggered?.call(event);
 
-            // Play Loud Alarm Clock Sound & Dispatch System Notification in Parallel
-            try {
-              AudioService().playAlertSound();
-            } catch (ae) {
-              debugPrint('[SocketService] playAlertSound error: $ae');
-            }
-
-            try {
-              NotificationService().showAlertNotification(event);
-            } catch (ne) {
-              debugPrint('[SocketService] showAlertNotification error: $ne');
-            }
+            try { AudioService().playAlertSound(); } catch (_) {}
+            try { NotificationService().showAlertNotification(event); } catch (_) {}
           }
         } catch (e, stack) {
           debugPrint('[SocketService] handleIncomingAlert error: $e\n$stack');
         }
       }
 
-      // Register primary alert event listeners
       _socket?.on('alert:triggered', handleIncomingAlert);
       _socket?.on('alert_triggered', handleIncomingAlert);
       _socket?.on('custom_alert:triggered', handleIncomingAlert);
 
-      void handleLevelStates(dynamic data) {
-        if (data != null) {
-          try {
-            final Map<String, dynamic> states = Map<String, dynamic>.from(data as Map);
-            states.forEach((k, v) {
-              if (v is Map && v['status'] != null) {
-                levelStates[k] = v['status'].toString();
-              } else if (v != null) {
-                levelStates[k] = v.toString();
-              }
-            });
-            onLevelStatesUpdate?.call(levelStates);
-          } catch (e) {
-            debugPrint('[SocketService] handleLevelStates error: $e');
-          }
-        }
-      }
-      _socket?.on('alert:states', handleLevelStates);
-      _socket?.on('alert_states', handleLevelStates);
-
-      _socket?.on('pivotUpdated', (data) {
-        if (data != null) {
-          try {
-            final map = Map<String, dynamic>.from(data as Map);
-            final updatedSym = map['symbol']?.toString();
-            if (updatedSym != null && updatedSym.toUpperCase() != activeSymbol.toUpperCase()) {
-              return;
-            }
-            activePivotState = PivotStateModel.fromJson(map);
-            currentConfig = PivotConfig(
-              r3: activePivotState!.r3,
-              r2: activePivotState!.r2,
-              s2: activePivotState!.s2,
-              s3: activePivotState!.s3,
-              tolerance: currentConfig.tolerance,
-              retriggerDistance: currentConfig.retriggerDistance,
-              chartTimeframe: currentConfig.chartTimeframe,
-              chartRange: currentConfig.chartRange,
-              barSpacing: currentConfig.barSpacing,
-              telegramAlertsEnabled: currentConfig.telegramAlertsEnabled,
-              autoCalculatePivot: currentConfig.autoCalculatePivot,
-              autoCalcIntervalMinutes: currentConfig.autoCalcIntervalMinutes,
-              customPriceAlertEnabled: currentConfig.customPriceAlertEnabled,
-              customPriceAlertTarget: currentConfig.customPriceAlertTarget,
-            );
-            levelStates['R3'] = 'READY';
-            levelStates['R2'] = 'READY';
-            levelStates['S2'] = 'READY';
-            levelStates['S3'] = 'READY';
-
-            onConfigUpdate?.call(currentConfig);
-            onLevelStatesUpdate?.call(levelStates);
-            onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
-          } catch (e) {
-            debugPrint('[SocketService] pivotUpdated error: $e');
-          }
-        }
-      });
-
-      // Connect
       _socket?.connect();
     } catch (e) {
       debugPrint('[SocketService] connectSocket exception: $e');
@@ -514,206 +372,114 @@ class SocketService with WidgetsBindingObserver {
     }
   }
 
-  /// Client-side fail-safe evaluator for active custom price alert (Proximity + Tick Crossing)
-  void _evaluateLocalCustomPriceTouch(MarketTick tick) {
-    if (!currentConfig.customPriceAlertEnabled) return;
-    final targetPrice = currentConfig.customPriceAlertTarget;
-    if (targetPrice <= 0) return;
-    if (levelStates['CUSTOM'] == 'TRIGGERED') return;
-
-    final sym = tick.symbol.toUpperCase();
-    if (sym != activeSymbol.toUpperCase() && sym != activeSymbol.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toUpperCase()) {
-      return;
-    }
-
-    final tolerance = currentConfig.tolerance > 0 ? currentConfig.tolerance : 0.20;
-    final currentPrice = tick.price;
-    final prevPrice = _lastEvaluatedPrice ?? currentPrice;
-    _lastEvaluatedPrice = currentPrice;
-
-    // 1. Proximity range check
-    final isTouching = (currentPrice - targetPrice).abs() <= tolerance;
-
-    // 2. Tick crossing check (cross up or cross down)
-    final crossedUp = prevPrice < targetPrice && currentPrice >= targetPrice;
-    final crossedDown = prevPrice > targetPrice && currentPrice <= targetPrice;
-    final isCrossing = crossedUp || crossedDown;
-
-    if (isTouching || isCrossing) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final debounceKey = '${sym}_CUSTOM';
-      final lastTrigger = _recentAlertTimestamps[debounceKey] ?? 0;
-      if (now - lastTrigger < 6000) return;
-      _recentAlertTimestamps[debounceKey] = now;
-
-      debugPrint('[SocketService] 🎯 Local Tick Match for Custom Target: \$$targetPrice (Live: \$$currentPrice, Crossing: $isCrossing)');
-
-      final localEvent = AlertEvent(
-        id: 'local_touch_$now',
-        symbol: activeSymbol,
-        displayName: activeSymbolConfig?.displayName ?? tick.displayName,
-        level: 'CUSTOM',
-        levelPrice: targetPrice,
-        currentPrice: currentPrice,
-        tolerance: tolerance,
-        screenshotPath: '',
-        triggerReason: '$activeSymbol touched custom target price @ \$${currentPrice.toStringAsFixed(2)}',
-        telegramStatus: 'SENT',
-        timestamp: DateTime.now(),
-        isTest: false,
-      );
-
-      currentConfig = currentConfig.copyWith(
-        customPriceAlertEnabled: false,
-        customPriceAlertStatus: 'TRIGGERED',
-      );
-      levelStates['CUSTOM'] = 'TRIGGERED';
-      _persistCustomAlertState();
-      onConfigUpdate?.call(currentConfig);
-      onLevelStatesUpdate?.call(levelStates);
-
-      final existingIdx = recentAlerts.indexWhere((a) => a.level == 'CUSTOM' && (now - a.timestamp.millisecondsSinceEpoch).abs() < 25000);
-      if (existingIdx >= 0) {
-        recentAlerts[existingIdx] = localEvent;
-      } else {
-        recentAlerts.insert(0, localEvent);
-        if (recentAlerts.length > 6) recentAlerts = recentAlerts.sublist(0, 6);
-      }
-      onAlertsUpdate?.call(recentAlerts);
-
-      // Trigger Dialog, Sound & Notification
-      onAlertTriggered?.call(localEvent);
-      try { AudioService().playAlertSound(); } catch (_) {}
-      try { NotificationService().showAlertNotification(localEvent); } catch (_) {}
-    }
-  }
-
-  /// Manually trigger a full end-to-end alert test on this device (Sound + Notification + Dialog)
-  Future<void> triggerLocalTestAlert({String level = 'CUSTOM', double? price}) async {
-    final targetPrice = price ?? (currentConfig.customPriceAlertTarget > 0 ? currentConfig.customPriceAlertTarget : (currentTick?.price ?? 3450.50));
-    final event = AlertEvent(
-      id: 'local_test_${DateTime.now().millisecondsSinceEpoch}',
-      symbol: activeSymbol,
-      displayName: activeSymbolConfig?.displayName ?? '$activeSymbol Spot',
-      level: level,
-      levelPrice: targetPrice,
-      currentPrice: targetPrice,
-      tolerance: currentConfig.tolerance,
-      screenshotPath: '',
-      triggerReason: 'Local Test Alert for level $level @ \$${targetPrice.toStringAsFixed(2)}',
-      telegramStatus: 'TEST',
-      timestamp: DateTime.now(),
-      isTest: true,
-    );
-
-    levelStates[level] = 'TRIGGERED';
-    if (level == 'CUSTOM') {
-      currentConfig = currentConfig.copyWith(
-        customPriceAlertEnabled: false,
-        customPriceAlertStatus: 'TRIGGERED',
-      );
-      _persistCustomAlertState();
-      onConfigUpdate?.call(currentConfig);
-    }
-    onLevelStatesUpdate?.call(levelStates);
-
-    recentAlerts.removeWhere((a) => a.id == event.id);
-    recentAlerts.insert(0, event);
-    if (recentAlerts.length > 6) {
-      recentAlerts = recentAlerts.sublist(0, 6);
-    }
-    onAlertsUpdate?.call(recentAlerts);
-
-    onAlertTriggered?.call(event);
-    try { AudioService().playAlertSound(); } catch (_) {}
-    try { NotificationService().showAlertNotification(event); } catch (_) {}
-  }
-
-  /// Trigger a live simulated alert test from backend server (broadcasts to Web & Mobile via WebSocket)
-  Future<bool> triggerRemoteTestAlert({String level = 'CUSTOM', double? price}) async {
+  /// Fetch all active alerts for current symbol
+  Future<void> fetchActiveAlerts() async {
     try {
-      final targetPrice = price ?? (currentConfig.customPriceAlertTarget > 0 ? currentConfig.customPriceAlertTarget : null);
-      final payload = <String, dynamic>{
-        'level': level,
-        'price': ?targetPrice,
-      };
-      final res = await http.post(
-        Uri.parse('$_serverUrl/api/test/trigger-alert'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(payload),
-      ).timeout(const Duration(seconds: 10));
-      return res.statusCode == 200;
-    } catch (e) {
-      debugPrint('[SocketService] triggerRemoteTestAlert error: $e');
-      return false;
-    }
-  }
-
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
-    disconnectSocket();
-  }
-
-  /// Ping server to test HTTP & WebSocket connectivity with latency measurement
-  Future<Map<String, dynamic>> checkServerConnectivity() async {
-    final stopwatch = Stopwatch()..start();
-    try {
-      final res = await http.get(Uri.parse('$_serverUrl/api/market/ticker')).timeout(const Duration(seconds: 6));
-      stopwatch.stop();
+      final res = await http.get(Uri.parse('$_serverUrl/api/alerts/custom/list?symbol=$activeSymbol')).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
-        return {
-          'success': true,
-          'latencyMs': stopwatch.elapsedMilliseconds,
-          'message': 'Connected (${stopwatch.elapsedMilliseconds}ms)',
-          'isSocketConnected': _isConnected,
-        };
-      } else {
-        return {
-          'success': false,
-          'latencyMs': stopwatch.elapsedMilliseconds,
-          'message': 'Server responded with status ${res.statusCode}',
-          'isSocketConnected': _isConnected,
-        };
+        final body = json.decode(res.body);
+        if (body['data'] != null && body['data'] is List) {
+          activeAlerts = (body['data'] as List)
+              .map((i) => PriceAlertModel.fromJson(Map<String, dynamic>.from(i as Map)))
+              .toList();
+          onActiveAlertsUpdate?.call(activeAlerts);
+        }
       }
     } catch (e) {
-      stopwatch.stop();
-      return {
-        'success': false,
-        'latencyMs': stopwatch.elapsedMilliseconds,
-        'message': 'Connection failed: ${e.toString()}',
-        'isSocketConnected': _isConnected,
-      };
+      debugPrint('[SocketService] fetchActiveAlerts error: $e');
     }
   }
 
-  Future<bool> autoCalculatePivots() async {
+  /// Create a new custom price alert
+  Future<bool> createCustomAlert({
+    required double targetPrice,
+    String condition = 'ANY',
+    String note = '',
+  }) async {
     try {
       final res = await http.post(
-        Uri.parse('$_serverUrl/api/config/auto-calculate'),
+        Uri.parse('$_serverUrl/api/alerts/custom/create'),
         headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'symbol': activeSymbol,
+          'targetPrice': targetPrice,
+          'condition': condition,
+          'note': note,
+          'createdBy': 'APP',
+        }),
       ).timeout(const Duration(seconds: 8));
 
       if (res.statusCode == 200) {
         final body = json.decode(res.body);
         if (body['data'] != null) {
-          currentConfig = PivotConfig.fromJson(Map<String, dynamic>.from(body['data']));
-          onConfigUpdate?.call(currentConfig);
+          final newAlert = PriceAlertModel.fromJson(Map<String, dynamic>.from(body['data']));
+          activeAlerts.removeWhere((a) => a.id == newAlert.id);
+          activeAlerts.insert(0, newAlert);
+          onActiveAlertsUpdate?.call(activeAlerts);
           return true;
         }
       }
     } catch (e) {
-      debugPrint('[SocketService] autoCalculatePivots error: $e');
+      debugPrint('[SocketService] createCustomAlert error: $e');
     }
     return false;
   }
 
-  Future<bool> updateRemoteConfig(Map<String, dynamic> updates) async {
+  /// Delete an active alert by ID
+  Future<bool> deleteCustomAlertById(String alertId) async {
+    try {
+      final res = await http.delete(
+        Uri.parse('$_serverUrl/api/alerts/custom/$alertId?symbol=$activeSymbol'),
+      ).timeout(const Duration(seconds: 8));
+
+      if (res.statusCode == 200) {
+        activeAlerts.removeWhere((a) => a.id == alertId);
+        onActiveAlertsUpdate?.call(activeAlerts);
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[SocketService] deleteCustomAlertById error: $e');
+    }
+    return false;
+  }
+
+  /// Clear all active alerts for current symbol
+  Future<bool> clearAllCustomAlerts() async {
+    try {
+      final res = await http.post(
+        Uri.parse('$_serverUrl/api/alerts/custom/clear'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'symbol': activeSymbol}),
+      ).timeout(const Duration(seconds: 8));
+
+      if (res.statusCode == 200) {
+        activeAlerts.clear();
+        onActiveAlertsUpdate?.call(activeAlerts);
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[SocketService] clearAllCustomAlerts error: $e');
+    }
+    return false;
+  }
+
+  // Legacy single alert compatibility helper
+  Future<bool> setCustomPriceAlert({required double targetPrice, required bool enabled}) async {
+    if (!enabled) {
+      return await clearAllCustomAlerts();
+    }
+    return await createCustomAlert(targetPrice: targetPrice);
+  }
+
+  Future<bool> deleteCustomPriceAlert() async {
+    return await clearAllCustomAlerts();
+  }
+
+  Future<bool> updateRemoteConfig(Map<String, dynamic> data) async {
     try {
       final payload = {
         'symbol': activeSymbol,
-        ...updates,
+        ...data,
       };
       final res = await http.put(
         Uri.parse('$_serverUrl/api/config'),
@@ -735,81 +501,72 @@ class SocketService with WidgetsBindingObserver {
     return false;
   }
 
-  Future<bool> setCustomPriceAlert({
-    required double targetPrice,
-    required bool enabled,
-  }) async {
+  Future<Map<String, dynamic>> checkServerConnectivity() async {
+    final sw = Stopwatch()..start();
     try {
+      final res = await http.get(Uri.parse('$_serverUrl/api/health')).timeout(const Duration(seconds: 4));
+      sw.stop();
+      if (res.statusCode == 200) {
+        return {
+          'success': true,
+          'message': 'Connected to $_serverUrl (${sw.elapsedMilliseconds}ms latency)',
+        };
+      }
+      return {
+        'success': false,
+        'message': 'HTTP ${res.statusCode}: Server reachable',
+      };
+    } catch (e) {
+      sw.stop();
+      return {
+        'success': false,
+        'message': 'Connection failed: $e',
+      };
+    }
+  }
+
+  Future<void> triggerLocalTestAlert({String level = 'CUSTOM', double? price}) async {
+    final targetPrice = price ?? (currentTick?.price ?? 3450.0);
+    final testAlert = AlertEvent(
+      id: 'local_test_${DateTime.now().millisecondsSinceEpoch}',
+      symbol: activeSymbol,
+      level: level,
+      levelPrice: targetPrice,
+      currentPrice: targetPrice,
+      tolerance: 0.20,
+      triggerReason: 'Manual Local Test Trigger',
+      telegramStatus: 'SENT',
+      timestamp: DateTime.now(),
+      screenshotPath: '',
+      isTest: true,
+    );
+    recentAlerts.insert(0, testAlert);
+    if (recentAlerts.length > 6) {
+      recentAlerts = recentAlerts.sublist(0, 6);
+    }
+    onAlertsUpdate?.call(recentAlerts);
+    onAlertTriggered?.call(testAlert);
+    try { AudioService().playAlertSound(); } catch (_) {}
+    try { NotificationService().showAlertNotification(testAlert); } catch (_) {}
+  }
+
+  Future<bool> triggerRemoteTestAlert({String level = 'CUSTOM', double? price}) async {
+    try {
+      final targetPrice = price ?? (currentTick?.price ?? 3450.0);
       final res = await http.post(
-        Uri.parse('$_serverUrl/api/alerts/custom'),
+        Uri.parse('$_serverUrl/api/alerts/test'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'symbol': activeSymbol,
-          'targetPrice': targetPrice,
-          'enabled': enabled,
+          'level': level,
+          'price': targetPrice,
         }),
-      ).timeout(const Duration(seconds: 8));
-
-      if (res.statusCode == 200) {
-        final body = json.decode(res.body);
-        if (body['data'] != null) {
-          final data = Map<String, dynamic>.from(body['data']);
-          final isEn = _asBool(data['enabled'], enabled);
-          final tPrice = _asDouble(data['targetPrice'], targetPrice);
-          final st = data['status']?.toString() ?? (isEn && tPrice > 0 ? 'ACTIVE' : 'INACTIVE');
-
-          currentConfig = currentConfig.copyWith(
-            customPriceAlertTarget: tPrice,
-            customPriceAlertEnabled: isEn,
-            customPriceAlertStatus: st,
-          );
-          levelStates['CUSTOM'] = st == 'ACTIVE' ? 'READY' : st;
-          onConfigUpdate?.call(currentConfig);
-          onLevelStatesUpdate?.call(levelStates);
-          _persistCustomAlertState();
-          return true;
-        }
-      }
+      ).timeout(const Duration(seconds: 10));
+      return res.statusCode == 200;
     } catch (e) {
-      debugPrint('[SocketService] setCustomPriceAlert error: $e');
+      debugPrint('[SocketService] triggerRemoteTestAlert error: $e');
+      return false;
     }
-
-    final ok = await updateRemoteConfig({
-      'customPriceAlertTarget': targetPrice,
-      'customPriceAlertEnabled': enabled,
-    });
-    if (ok) _persistCustomAlertState();
-    return ok;
-  }
-
-  Future<bool> deleteCustomPriceAlert() async {
-    try {
-      final res = await http.delete(
-        Uri.parse('$_serverUrl/api/alerts/custom/$activeSymbol'),
-      ).timeout(const Duration(seconds: 8));
-
-      if (res.statusCode == 200) {
-        currentConfig = currentConfig.copyWith(
-          customPriceAlertTarget: 0.0,
-          customPriceAlertEnabled: false,
-          customPriceAlertStatus: 'INACTIVE',
-        );
-        levelStates['CUSTOM'] = 'INACTIVE';
-        onConfigUpdate?.call(currentConfig);
-        onLevelStatesUpdate?.call(levelStates);
-        _persistCustomAlertState();
-        return true;
-      }
-    } catch (e) {
-      debugPrint('[SocketService] deleteCustomPriceAlert error: $e');
-    }
-
-    final ok = await updateRemoteConfig({
-      'customPriceAlertTarget': 0.0,
-      'customPriceAlertEnabled': false,
-    });
-    if (ok) _persistCustomAlertState();
-    return ok;
   }
 
   void disconnectSocket() {
@@ -822,50 +579,21 @@ class SocketService with WidgetsBindingObserver {
 
   Future<void> fetchInitialData() async {
     try {
-      // 1. Fetch Config directly from Online Database (Single Source of Truth)
+      // 1. Fetch Config
       final configRes = await http.get(Uri.parse('$_serverUrl/api/config?symbol=$activeSymbol')).timeout(const Duration(seconds: 5));
       if (configRes.statusCode == 200) {
         final body = json.decode(configRes.body);
         if (body['data'] != null) {
           final configMap = Map<String, dynamic>.from(body['data']);
           currentConfig = PivotConfig.fromJson(configMap);
-          if (configMap['customPriceAlertStatus'] != null) {
-            levelStates['CUSTOM'] = configMap['customPriceAlertStatus'].toString() == 'ACTIVE'
-                ? 'READY'
-                : configMap['customPriceAlertStatus'].toString();
-          }
           onConfigUpdate?.call(currentConfig);
-          onLevelStatesUpdate?.call(levelStates);
-          _persistCustomAlertState();
         }
       }
 
-      // 1b. Specifically fetch custom alert status to ensure 100% online database parity
-      try {
-        final customRes = await http.get(Uri.parse('$_serverUrl/api/alerts/custom?symbol=$activeSymbol')).timeout(const Duration(seconds: 4));
-        if (customRes.statusCode == 200) {
-          final body = json.decode(customRes.body);
-          if (body['data'] != null) {
-            final data = Map<String, dynamic>.from(body['data']);
-            final bool isEn = _asBool(data['enabled'], false);
-            final double tPrice = _asDouble(data['targetPrice'], 0.0);
-            final String st = data['status']?.toString() ?? (isEn && tPrice > 0 ? 'ACTIVE' : 'INACTIVE');
-            currentConfig = currentConfig.copyWith(
-              customPriceAlertEnabled: isEn,
-              customPriceAlertTarget: tPrice,
-              customPriceAlertStatus: st,
-            );
-            levelStates['CUSTOM'] = st == 'ACTIVE' ? 'READY' : st;
-            onConfigUpdate?.call(currentConfig);
-            onLevelStatesUpdate?.call(levelStates);
-            _persistCustomAlertState();
-          }
-        }
-      } catch (e) {
-        debugPrint('[SocketService] fetch custom alert error: $e');
-      }
+      // 2. Fetch Active Multi-Alerts
+      await fetchActiveAlerts();
 
-      // 2. Fetch Latest 6 Alerts
+      // 3. Fetch Latest 6 Alerts
       final alertsRes = await http.get(Uri.parse('$_serverUrl/api/alerts?limit=6')).timeout(const Duration(seconds: 5));
       if (alertsRes.statusCode == 200) {
         final body = json.decode(alertsRes.body);
@@ -876,7 +604,7 @@ class SocketService with WidgetsBindingObserver {
         }
       }
 
-      // 3. Fetch Ticker
+      // 4. Fetch Ticker
       final tickerRes = await http.get(Uri.parse('$_serverUrl/api/market/ticker')).timeout(const Duration(seconds: 5));
       if (tickerRes.statusCode == 200) {
         final body = json.decode(tickerRes.body);
@@ -981,6 +709,7 @@ class SocketService with WidgetsBindingObserver {
             currentTick = MarketTick.fromJson(Map<String, dynamic>.from(data['market']));
             onMarketTick?.call(currentTick!);
           }
+          fetchActiveAlerts();
           onSymbolUpdate?.call(activeSymbol, activeSymbolConfig, activePivotState);
           return true;
         }
@@ -989,5 +718,12 @@ class SocketService with WidgetsBindingObserver {
       debugPrint('[SocketService] switchSymbol error: $e');
     }
     return false;
+  }
+
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    disconnectSocket();
   }
 }

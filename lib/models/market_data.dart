@@ -418,3 +418,56 @@ class PivotStateModel {
     );
   }
 }
+
+class PriceAlertModel {
+  final String id;
+  final String symbol;
+  final double targetPrice;
+  final String condition;
+  final double tolerance;
+  final String note;
+  final String status;
+  final String createdBy;
+  final DateTime createdAt;
+
+  PriceAlertModel({
+    required this.id,
+    required this.symbol,
+    required this.targetPrice,
+    this.condition = 'ANY',
+    this.tolerance = 0.20,
+    this.note = '',
+    this.status = 'ACTIVE',
+    this.createdBy = 'APP',
+    required this.createdAt,
+  });
+
+  factory PriceAlertModel.fromJson(Map<String, dynamic> json) {
+    final rawId = json['_id']?.toString() ?? json['id']?.toString() ?? '';
+    return PriceAlertModel(
+      id: rawId.isNotEmpty ? rawId : 'temp_${DateTime.now().millisecondsSinceEpoch}',
+      symbol: json['symbol']?.toString().toUpperCase() ?? 'XAUUSD',
+      targetPrice: _toDouble(json['targetPrice'] ?? json['price'], 0.0),
+      condition: json['condition']?.toString() ?? 'ANY',
+      tolerance: _toDouble(json['tolerance'], 0.20),
+      note: json['note']?.toString() ?? '',
+      status: json['status']?.toString() ?? 'ACTIVE',
+      createdBy: json['createdBy']?.toString() ?? 'APP',
+      createdAt: json['createdAt'] != null
+          ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
+          : DateTime.now(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'symbol': symbol,
+    'targetPrice': targetPrice,
+    'condition': condition,
+    'tolerance': tolerance,
+    'note': note,
+    'status': status,
+    'createdBy': createdBy,
+  };
+}
+

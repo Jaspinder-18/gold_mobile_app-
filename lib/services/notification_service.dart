@@ -1,6 +1,54 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:http/http.dart' as http;
 import '../models/market_data.dart';
+import 'audio_service.dart';
+
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
+
+  debugPrint('[FCM Background] Remote message received: ${message.messageId}, data: ${message.data}');
+
+  try {
+    // Show high priority loud notification when app is in background/killed
+    final notificationService = NotificationService();
+    await notificationService.initialize();
+
+    final data = message.data;
+    final symbol = data['symbol']?.toString() ?? 'XAUUSD';
+    final targetPrice = double.tryParse(data['targetPrice']?.toString() ?? '0') ?? 0.0;
+    final currentPrice = double.tryParse(data['currentPrice']?.toString() ?? '0') ?? targetPrice;
+    final level = data['level']?.toString() ?? 'CUSTOM';
+    final screenshotUrl = data['screenshotUrl']?.toString() ?? '';
+
+    final event = AlertEvent(
+      id: data['alertId']?.toString() ?? 'fcm_${DateTime.now().millisecondsSinceEpoch}',
+      symbol: symbol,
+      displayName: '$symbol Spot',
+      level: level,
+      levelPrice: targetPrice,
+      currentPrice: currentPrice,
+      tolerance: 0.20,
+      screenshotPath: screenshotUrl,
+      triggerReason: message.notification?.body ?? '$symbol touched target price @ \$$currentPrice',
+      telegramStatus: 'SENT',
+      timestamp: DateTime.now(),
+      isTest: false,
+    );
+
+    await notificationService.showAlertNotification(event);
+    try { AudioService().playAlertSound(); } catch (_) {}
+  } catch (e) {
+    debugPrint('[FCM Background] Handler error: $e');
+  }
+}
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
@@ -13,10 +61,12 @@ class NotificationService {
   Function(String?)? onNotificationTap;
   bool _isInitialized = false;
   bool _hasPermission = false;
+  String? _fcmToken;
 
   bool get hasPermission => _hasPermission;
+  String? get fcmToken => _fcmToken;
 
-  Future<void> initialize() async {
+  Future<void> initialize({String? serverUrl}) async {
     if (_isInitialized) return;
 
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -43,7 +93,7 @@ class NotificationService {
       },
     );
 
-    // 1. Create Loud Alarm Notification Channel with raw resource sound & full screen priority
+    // 1. Loud Alarm Notification Channel with raw resource sound & full screen priority
     final alarmChannel = AndroidNotificationChannel(
       'gold_alarm_channel_v4',
       '🚨 High Priority Price Level Alarms',
@@ -57,11 +107,11 @@ class NotificationService {
       showBadge: true,
     );
 
-    // 2. Create Standard High-Priority Notification Channel (System Sound)
+    // 2. Standard High-Priority Channel
     final standardChannel = AndroidNotificationChannel(
       'gold_alerts_channel_standard',
       '🔔 Market Price Touch Alerts',
-      description: 'Instant notification alerts when market touches custom target price or pivot levels',
+      description: 'Instant notification alerts when market touches custom target price',
       importance: Importance.max,
       playSound: true,
       enableVibration: true,
@@ -70,26 +120,132 @@ class NotificationService {
       showBadge: true,
     );
 
-    // 3. Fallback Notification Channel
-    final fallbackChannel = AndroidNotificationChannel(
-      'gold_alarm_channel_fallback',
-      '⚡ Price Alerts (Fallback)',
-      description: 'Fallback notifications for instant price triggers',
-      importance: Importance.high,
-      playSound: true,
-      enableVibration: true,
-      showBadge: true,
-    );
-
     final androidImpl = _notificationsPlugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     if (androidImpl != null) {
       await androidImpl.createNotificationChannel(alarmChannel);
       await androidImpl.createNotificationChannel(standardChannel);
-      await androidImpl.createNotificationChannel(fallbackChannel);
     }
 
+    // 3. Initialize Firebase Messaging
+    await _initFirebaseMessaging(serverUrl: serverUrl);
+
     _isInitialized = true;
+  }
+
+  Future<void> _initFirebaseMessaging({String? serverUrl}) async {
+    try {
+      try {
+        await Firebase.initializeApp();
+      } catch (e) {
+        debugPrint('[NotificationService] Firebase.initializeApp note: $e');
+      }
+
+      final messaging = FirebaseMessaging.instance;
+
+      // Request FCM permission
+      final settings = await messaging.requestPermission(
+        alert: true,
+        announcement: true,
+        badge: true,
+        carPlay: false,
+        criticalAlert: true,
+        provisional: false,
+        sound: true,
+      );
+
+      _hasPermission = settings.authorizationStatus == AuthorizationStatus.authorized ||
+          settings.authorizationStatus == AuthorizationStatus.provisional;
+
+      // Subscribe to topics
+      try {
+        await messaging.subscribeToTopic('all_alerts');
+        debugPrint('[NotificationService] Subscribed to FCM topic: all_alerts');
+      } catch (e) {
+        debugPrint('[NotificationService] Topic subscription note: $e');
+      }
+
+      // Get FCM Token
+      try {
+        _fcmToken = await messaging.getToken();
+        debugPrint('[NotificationService] FCM Token retrieved: $_fcmToken');
+        if (_fcmToken != null && serverUrl != null) {
+          await registerTokenWithServer(serverUrl, _fcmToken!);
+        }
+      } catch (e) {
+        debugPrint('[NotificationService] getToken note: $e');
+      }
+
+      // Listen to token refreshes
+      messaging.onTokenRefresh.listen((newToken) {
+        _fcmToken = newToken;
+        if (serverUrl != null) {
+          registerTokenWithServer(serverUrl, newToken);
+        }
+      });
+
+      // Foreground message handler
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        debugPrint('[NotificationService] Foreground FCM message received: ${message.data}');
+        final data = message.data;
+        final symbol = data['symbol']?.toString() ?? 'XAUUSD';
+        final targetPrice = double.tryParse(data['targetPrice']?.toString() ?? '0') ?? 0.0;
+        final currentPrice = double.tryParse(data['currentPrice']?.toString() ?? '0') ?? targetPrice;
+        final level = data['level']?.toString() ?? 'CUSTOM';
+        final screenshotUrl = data['screenshotUrl']?.toString() ?? '';
+
+        final event = AlertEvent(
+          id: data['alertId']?.toString() ?? 'fcm_${DateTime.now().millisecondsSinceEpoch}',
+          symbol: symbol,
+          displayName: '$symbol Spot',
+          level: level,
+          levelPrice: targetPrice,
+          currentPrice: currentPrice,
+          tolerance: 0.20,
+          screenshotPath: screenshotUrl,
+          triggerReason: message.notification?.body ?? '$symbol touched target price @ \$$currentPrice',
+          telegramStatus: 'SENT',
+          timestamp: DateTime.now(),
+          isTest: false,
+        );
+
+        showAlertNotification(event);
+        try { AudioService().playAlertSound(); } catch (_) {}
+      });
+
+      // When notification opened from background
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        debugPrint('[NotificationService] FCM Notification clicked to open app: ${message.data}');
+        final payload = message.data['screenshotUrl'] ?? message.data['alertId'];
+        if (payload != null && onNotificationTap != null) {
+          onNotificationTap?.call(payload.toString());
+        }
+      });
+
+      FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    } catch (e) {
+      debugPrint('[NotificationService] Firebase Messaging init exception: $e');
+    }
+  }
+
+  /// Register FCM Token with backend server
+  Future<void> registerTokenWithServer(String serverUrl, String token) async {
+    try {
+      final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+      await http.post(
+        Uri.parse('$cleanUrl/api/alerts/fcm/register'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'token': token,
+          'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID',
+          'deviceName': 'Mobile Client',
+          'symbolSubscriptions': ['ALL']
+        }),
+      ).timeout(const Duration(seconds: 5));
+      debugPrint('[NotificationService] ✓ Registered FCM token with server.');
+    } catch (e) {
+      debugPrint('[NotificationService] registerTokenWithServer error: $e');
+    }
   }
 
   /// Request runtime permissions on Android 13+ (API 33+) & iOS
@@ -131,11 +287,11 @@ class NotificationService {
     final String body;
 
     if (isCustom) {
-      title = '🚨 $symName TOUCHED CUSTOM TARGET @ \$${event.currentPrice.toStringAsFixed(2)}';
-      body = 'Custom Target: \$${event.levelPrice.toStringAsFixed(2)} · Price Alert Triggered · Tap to view live chart';
+      title = '🚨 $symName TOUCHED TARGET @ \$${event.currentPrice.toStringAsFixed(2)}';
+      body = 'Target: \$${event.levelPrice.toStringAsFixed(2)} · Price Alert Triggered · Tap to view live chart';
     } else {
       title = '🚨 $symName TOUCHED ${event.level} @ \$${event.currentPrice.toStringAsFixed(2)}';
-      body = 'Target: \$${event.levelPrice.toStringAsFixed(2)} · ${isResistance ? "Resistance" : "Support"} Level · Tap to view full chart';
+      body = 'Target: \$${event.levelPrice.toStringAsFixed(2)} · ${isResistance ? "Resistance" : "Support"} Level';
     }
 
     final notificationId = (event.level.hashCode ^ event.symbol.hashCode ^ (DateTime.now().second)).abs() % 100000;
@@ -183,9 +339,9 @@ class NotificationService {
         details,
         payload: event.screenshotPath.isNotEmpty ? event.screenshotPath : event.id,
       );
-      debugPrint('[NotificationService] ✓ Primary notification delivered for $symName ${event.level}');
+      debugPrint('[NotificationService] ✓ Primary notification delivered for $symName');
     } catch (e) {
-      debugPrint('[NotificationService] showAlertNotification primary channel error: $e, falling back to standard channel...');
+      debugPrint('[NotificationService] Primary notification error: $e, using standard channel...');
       try {
         final standardAndroid = AndroidNotificationDetails(
           'gold_alerts_channel_standard',
@@ -210,14 +366,10 @@ class NotificationService {
           fallbackDetails,
           payload: event.screenshotPath.isNotEmpty ? event.screenshotPath : event.id,
         );
-        debugPrint('[NotificationService] ✓ Fallback notification delivered for $symName');
-      } catch (e2) {
-        debugPrint('[NotificationService] Fallback notification failed: $e2');
-      }
+      } catch (_) {}
     }
   }
 
-  /// Direct manual notification test for settings verification
   Future<void> testNotification() async {
     final testEvent = AlertEvent(
       id: 'test_notif_${DateTime.now().millisecondsSinceEpoch}',
