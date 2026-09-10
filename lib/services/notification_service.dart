@@ -62,9 +62,16 @@ class NotificationService {
   bool _isInitialized = false;
   bool _hasPermission = false;
   String? _fcmToken;
+  final Map<String, int> _recentHandledAlerts = {};
 
   bool get hasPermission => _hasPermission;
   String? get fcmToken => _fcmToken;
+
+  void recordRecentAlert(String alertId) {
+    if (alertId.isNotEmpty) {
+      _recentHandledAlerts[alertId] = DateTime.now().millisecondsSinceEpoch;
+    }
+  }
 
   Future<void> initialize({String? serverUrl}) async {
     if (_isInitialized) return;
@@ -184,10 +191,24 @@ class NotificationService {
         }
       });
 
-      // Foreground message handler
+      // Foreground message handler (deduplicated against Socket.IO)
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
         debugPrint('[NotificationService] Foreground FCM message received: ${message.data}');
         final data = message.data;
+        final alertId = data['alertId']?.toString() ?? message.messageId ?? '';
+        final now = DateTime.now().millisecondsSinceEpoch;
+
+        if (alertId.isNotEmpty && _recentHandledAlerts.containsKey(alertId)) {
+          final lastHandled = _recentHandledAlerts[alertId] ?? 0;
+          if ((now - lastHandled) < 20000) {
+            debugPrint('[NotificationService] Ignoring duplicate foreground FCM for already-handled alert: $alertId');
+            return;
+          }
+        }
+        if (alertId.isNotEmpty) {
+          _recentHandledAlerts[alertId] = now;
+        }
+
         final symbol = data['symbol']?.toString() ?? 'XAUUSD';
         final targetPrice = double.tryParse(data['targetPrice']?.toString() ?? '0') ?? 0.0;
         final currentPrice = double.tryParse(data['currentPrice']?.toString() ?? '0') ?? targetPrice;
@@ -195,7 +216,7 @@ class NotificationService {
         final screenshotUrl = data['screenshotUrl']?.toString() ?? '';
 
         final event = AlertEvent(
-          id: data['alertId']?.toString() ?? 'fcm_${DateTime.now().millisecondsSinceEpoch}',
+          id: alertId.isNotEmpty ? alertId : 'fcm_${DateTime.now().millisecondsSinceEpoch}',
           symbol: symbol,
           displayName: '$symbol Spot',
           level: level,

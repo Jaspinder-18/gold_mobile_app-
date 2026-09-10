@@ -306,9 +306,18 @@ class SocketService with WidgetsBindingObserver {
 
           final event = AlertEvent.fromJson(eventMap);
           final now = DateTime.now().millisecondsSinceEpoch;
+          final alertAgeMs = (now - event.timestamp.millisecondsSinceEpoch).abs();
+
+          // Reject historical or stale alert events (older than 20 seconds) unless it's a direct manual test
+          // This ensures that when the app opens or reconnects, past alerts will NEVER pop up false alarms!
+          if (alertAgeMs > 20000 && !event.isTest) {
+            debugPrint('[SocketService] Discarding stale/historical alert ($alertAgeMs ms old): ${event.id} (${event.symbol} ${event.level})');
+            return;
+          }
+
           final debounceKey = '${event.symbol}_${event.level}_${event.levelPrice.toStringAsFixed(2)}';
           final lastTrigger = _recentAlertTimestamps[debounceKey] ?? 0;
-          final isRecentDuplicate = (now - lastTrigger) < 6000;
+          final isRecentDuplicate = (now - lastTrigger) < 15000;
 
           debugPrint('[SocketService] 🚨 Price Alert Triggered: ${event.symbol} ${event.level} @ \$${event.currentPrice} (isDuplicate: $isRecentDuplicate)');
 
@@ -345,10 +354,11 @@ class SocketService with WidgetsBindingObserver {
           }
           onAlertsUpdate?.call(recentAlerts);
 
-          // 4. Trigger UI dialog, audio alarm & push notification (once per touch event)
+          // 4. Trigger UI dialog, audio alarm & push notification (strictly once per touch event)
           if (!isRecentDuplicate) {
             _recentAlertTimestamps[debounceKey] = now;
             _recentAlertTimestamps[event.id] = now;
+            NotificationService().recordRecentAlert(event.id);
 
             onAlertTriggered?.call(event);
 

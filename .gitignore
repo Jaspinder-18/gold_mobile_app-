@@ -35,8 +35,10 @@ migrate_working_dir/
 /android/build/
 /android/.gradle/
 .gradle/
-*.log
 /coverage/
 /android/app/debug
 /android/app/profile
 /android/app/release
+*google-services.json
+*.keystore
+*.jks

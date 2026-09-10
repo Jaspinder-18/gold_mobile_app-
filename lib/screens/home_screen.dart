@@ -285,88 +285,262 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
 
     _isAlertDialogOpen = true;
-    final isCustom = event.level.toUpperCase() == 'CUSTOM';
+    final isResistance = event.level.toUpperCase().startsWith('R');
+    final isSupport = event.level.toUpperCase().startsWith('S');
+    final levelColor = isResistance
+        ? const Color(0xFFEF4444)
+        : (isSupport ? const Color(0xFF10B981) : const Color(0xFFF59E0B));
+
     final symName = event.displayName.isNotEmpty
         ? event.displayName
         : (event.symbol.isNotEmpty ? event.symbol : 'Target');
+    final targetPrice = event.levelPrice > 0 ? event.levelPrice : event.currentPrice;
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0F172A),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: Color(0xFFEF4444), width: 2),
-        ),
-        title: Row(
-          children: [
-            const Icon(Icons.crisis_alert, color: Color(0xFFEF4444), size: 24),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                isCustom ? '🚨 CUSTOM TARGET HIT!' : '🚨 ${event.level} TOUCHED!',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16),
+      builder: (dialogCtx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F172A),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: levelColor.withValues(alpha: 0.8), width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: levelColor.withValues(alpha: 0.35),
+                blurRadius: 30,
+                spreadRadius: 2,
               ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-              decoration: BoxDecoration(
-                color: const Color(0xFFEF4444).withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
+              const BoxShadow(
+                color: Colors.black87,
+                blurRadius: 20,
+                offset: Offset(0, 10),
               ),
-              child: Text(
-                '🎯 TARGET: \$${event.levelPrice.toStringAsFixed(2)} · LIVE: \$${event.currentPrice.toStringAsFixed(2)}',
-                style: const TextStyle(color: Color(0xFFFCA5A5), fontWeight: FontWeight.bold, fontSize: 11, fontFamily: 'monospace'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '$symName touched your custom price of \$${event.levelPrice.toStringAsFixed(2)} at \$${event.currentPrice.toStringAsFixed(2)}',
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-            ),
-            const SizedBox(height: 10),
-            if (event.screenshotPath.isNotEmpty)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: CachedNetworkImage(
-                  imageUrl: _formatImageUrl(event.screenshotPath),
-                  height: 110,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  placeholder: (c, u) => Container(color: Colors.black),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(22.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Top Animated Badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: levelColor.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: levelColor, width: 1.5),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.notification_important_rounded, color: levelColor, size: 18),
+                      const SizedBox(width: 6),
+                      Text(
+                        'PRICE TOUCH ALERT',
+                        style: TextStyle(
+                          color: levelColor,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-          ],
+
+                const SizedBox(height: 16),
+
+                // Symbol Title
+                Text(
+                  event.symbol,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.1,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  symName,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                  ),
+                ),
+
+                const SizedBox(height: 18),
+
+                // Price Information Card
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF070C18),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFF1E293B)),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Trigger Level:',
+                            style: TextStyle(color: Colors.white60, fontSize: 13),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: levelColor.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              event.level,
+                              style: TextStyle(
+                                color: levelColor,
+                                fontWeight: FontWeight.w900,
+                                fontSize: 13,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Touch Price:',
+                            style: TextStyle(color: Colors.white60, fontSize: 13),
+                          ),
+                          Text(
+                            '\$${event.currentPrice.toStringAsFixed(2)}',
+                            style: TextStyle(
+                              color: levelColor,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (targetPrice != event.currentPrice && targetPrice > 0) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Target Level:',
+                              style: TextStyle(color: Colors.white38, fontSize: 11),
+                            ),
+                            Text(
+                              '\$${targetPrice.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 6),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Time:',
+                            style: TextStyle(color: Colors.white38, fontSize: 11),
+                          ),
+                          Text(
+                            DateFormat('HH:mm:ss · dd MMM yyyy').format(event.timestamp),
+                            style: const TextStyle(
+                              color: Colors.white60,
+                              fontSize: 11,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 22),
+
+                // Action Buttons: Cancel and View Chart
+                Row(
+                  children: [
+                    // Cancel Button
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          AudioService().stop();
+                          _isAlertDialogOpen = false;
+                          Navigator.of(dialogCtx).pop();
+                        },
+                        icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white70),
+                        label: const Text(
+                          'Cancel',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          side: const BorderSide(color: Color(0xFF334155)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // View Chart Button
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          AudioService().stop();
+                          _isAlertDialogOpen = false;
+                          Navigator.of(dialogCtx).pop();
+                          _openScreenshotViewer(event);
+                        },
+                        icon: const Icon(Icons.candlestick_chart_rounded, size: 18, color: Colors.black),
+                        label: const Text(
+                          'View Chart',
+                          style: TextStyle(
+                            color: Colors.black,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 14,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFF59E0B),
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          elevation: 4,
+                          shadowColor: const Color(0xFFF59E0B).withValues(alpha: 0.5),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
-        actions: [
-          TextButton(
-            child: const Text('DISMISS', style: TextStyle(color: Colors.grey, fontSize: 12)),
-            onPressed: () {
-              _isAlertDialogOpen = false;
-              AudioService().stop();
-              Navigator.pop(ctx);
-            },
-          ),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.fullscreen, color: Colors.black, size: 16),
-            label: const Text('VIEW CHART', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12)),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF59E0B)),
-            onPressed: () {
-              _isAlertDialogOpen = false;
-              AudioService().stop();
-              Navigator.pop(ctx);
-              _openScreenshotViewer(event);
-            },
-          ),
-        ],
       ),
     ).then((_) {
       _isAlertDialogOpen = false;
