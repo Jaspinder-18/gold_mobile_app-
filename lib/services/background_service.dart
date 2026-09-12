@@ -149,95 +149,33 @@ class BackgroundService {
   bool get isRunning => _isServiceRunning;
 
   Future<void> initialize() async {
-    FlutterForegroundTask.init(
-      androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'gold_bg_service_channel_silent',
-        channelName: '📊 Background Market Service',
-        channelDescription: 'Maintains live background connection for price monitoring',
-        channelImportance: NotificationChannelImportance.LOW,
-        priority: NotificationPriority.LOW,
-        playSound: false,
-        enableVibration: false,
-      ),
-      iosNotificationOptions: const IOSNotificationOptions(
-        showNotification: false,
-        playSound: false,
-      ),
-      foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(5000), // Check every 5s for rapid touch alerts
-        autoRunOnBoot: true,
-        allowWakeLock: true,
-        allowWifiLock: true,
-      ),
-    );
-
-    // Register receive port
-    FlutterForegroundTask.addTaskDataCallback((data) {
-      debugPrint('[BackgroundService] Data received from background task: $data');
-    });
+    try {
+      if (await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.stopService();
+      }
+    } catch (_) {}
   }
 
   Future<bool> startService({String symbol = 'XAUUSD', double targetPrice = 0.0, bool enabled = false}) async {
     try {
       if (await FlutterForegroundTask.isRunningService) {
-        _isServiceRunning = true;
-        updateCustomAlert(symbol: symbol, targetPrice: targetPrice, enabled: enabled);
-        return true;
+        await FlutterForegroundTask.stopService();
       }
-
-      final reqPermission = await FlutterForegroundTask.requestNotificationPermission();
-      if (reqPermission == NotificationPermission.denied) {
-        debugPrint('[BackgroundService] Notification permission denied');
-      }
-
-      await FlutterForegroundTask.startService(
-        serviceId: 256,
-        notificationTitle: '📊 ALERT Terminal Service Active',
-        notificationText: enabled && targetPrice > 0
-            ? '$symbol Target: \$${targetPrice.toStringAsFixed(2)} (Active Monitoring)'
-            : '$symbol Live Market Monitoring Active',
-        callback: startCallback,
-      );
-
-      _isServiceRunning = await FlutterForegroundTask.isRunningService;
-      return _isServiceRunning;
-    } catch (e) {
-      debugPrint('[BackgroundService] startService error: $e');
-      return false;
-    }
+    } catch (_) {}
+    return false;
   }
 
   Future<void> updateCustomAlert({required String symbol, required double targetPrice, required bool enabled}) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('active_symbol', symbol);
-      await prefs.setDouble('custom_target_price_${symbol.toUpperCase()}', targetPrice);
-      await prefs.setBool('custom_price_alert_enabled_${symbol.toUpperCase()}', enabled);
-
-      FlutterForegroundTask.sendDataToTask({
-        'activeSymbol': symbol,
-        'customTargetPrice': targetPrice,
-        'customPriceAlertEnabled': enabled,
-      });
-
-      if (await FlutterForegroundTask.isRunningService) {
-        FlutterForegroundTask.updateService(
-          notificationTitle: '📊 $symbol Live Guard Active',
-          notificationText: enabled && targetPrice > 0
-              ? '$symbol Target: \$${targetPrice.toStringAsFixed(2)} (Active Alert Guard)'
-              : '$symbol Live Feed Active',
-        );
-      }
-    } catch (e) {
-      debugPrint('[BackgroundService] updateCustomAlert error: $e');
-    }
+    // No-op: Native FCM high-priority push takes precedence
   }
 
   Future<bool> stopService() async {
     try {
-      await FlutterForegroundTask.stopService();
-      _isServiceRunning = await FlutterForegroundTask.isRunningService;
-      return !_isServiceRunning;
+      if (await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.stopService();
+      }
+      _isServiceRunning = false;
+      return true;
     } catch (e) {
       debugPrint('[BackgroundService] stopService error: $e');
       return false;

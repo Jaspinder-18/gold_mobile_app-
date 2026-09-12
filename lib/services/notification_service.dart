@@ -216,12 +216,6 @@ class NotificationService {
         final granted = await androidImpl.requestNotificationsPermission();
         _hasPermission = granted ?? false;
       } catch (_) {}
-      try {
-        final isIgnoring = await FlutterForegroundTask.isIgnoringBatteryOptimizations;
-        if (!isIgnoring) {
-          await FlutterForegroundTask.requestIgnoreBatteryOptimization();
-        }
-      } catch (_) {}
     }
 
     // 3. Initialize Firebase Messaging & Token Registration
@@ -410,15 +404,6 @@ class NotificationService {
       if (androidImpl != null) {
         final granted = await androidImpl.requestNotificationsPermission();
         _hasPermission = granted ?? false;
-
-        // Request ignoring battery optimization
-        try {
-          final isIgnoring = await FlutterForegroundTask.isIgnoringBatteryOptimizations;
-          if (!isIgnoring) {
-            await FlutterForegroundTask.requestIgnoreBatteryOptimization();
-          }
-        } catch (_) {}
-
         return _hasPermission;
       }
 

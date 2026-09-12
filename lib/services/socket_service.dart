@@ -7,7 +7,6 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../models/market_data.dart';
 import 'audio_service.dart';
 import 'notification_service.dart';
-import 'background_service.dart';
 
 class SocketService with WidgetsBindingObserver {
   static final SocketService _instance = SocketService._internal();
@@ -95,12 +94,6 @@ class SocketService with WidgetsBindingObserver {
     await NotificationService().initialize(serverUrl: _serverUrl);
     await fetchInitialData();
     connectSocket();
-
-    BackgroundService().startService(
-      symbol: activeSymbol,
-      targetPrice: activeAlerts.isNotEmpty ? activeAlerts.first.targetPrice : 0.0,
-      enabled: activeAlerts.isNotEmpty,
-    );
   }
 
   Future<void> updateServerUrl(String newUrl) async {
@@ -280,11 +273,6 @@ class SocketService with WidgetsBindingObserver {
                   .map((i) => PriceAlertModel.fromJson(Map<String, dynamic>.from(i as Map)))
                   .toList();
               onActiveAlertsUpdate?.call(activeAlerts);
-              BackgroundService().updateCustomAlert(
-                symbol: activeSymbol,
-                targetPrice: activeAlerts.isNotEmpty ? activeAlerts.first.targetPrice : 0.0,
-                enabled: activeAlerts.isNotEmpty,
-              );
             } else {
               fetchActiveAlerts();
             }
@@ -431,11 +419,6 @@ class SocketService with WidgetsBindingObserver {
           activeAlerts.removeWhere((a) => a.id == newAlert.id);
           activeAlerts.insert(0, newAlert);
           onActiveAlertsUpdate?.call(activeAlerts);
-          BackgroundService().updateCustomAlert(
-            symbol: activeSymbol,
-            targetPrice: targetPrice,
-            enabled: true,
-          );
           return true;
         }
       }
@@ -455,11 +438,6 @@ class SocketService with WidgetsBindingObserver {
       if (res.statusCode == 200) {
         activeAlerts.removeWhere((a) => a.id == alertId);
         onActiveAlertsUpdate?.call(activeAlerts);
-        BackgroundService().updateCustomAlert(
-          symbol: activeSymbol,
-          targetPrice: activeAlerts.isNotEmpty ? activeAlerts.first.targetPrice : 0.0,
-          enabled: activeAlerts.isNotEmpty,
-        );
         return true;
       }
     } catch (e) {
@@ -480,11 +458,6 @@ class SocketService with WidgetsBindingObserver {
       if (res.statusCode == 200) {
         activeAlerts.clear();
         onActiveAlertsUpdate?.call(activeAlerts);
-        BackgroundService().updateCustomAlert(
-          symbol: activeSymbol,
-          targetPrice: 0.0,
-          enabled: false,
-        );
         return true;
       }
     } catch (e) {

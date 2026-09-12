@@ -6,7 +6,6 @@ import 'firebase_options.dart';
 import 'screens/splash_screen.dart';
 import 'services/audio_service.dart';
 import 'services/notification_service.dart';
-import 'services/onesignal_service.dart';
 import 'services/socket_service.dart';
 import 'services/background_service.dart';
 
@@ -48,7 +47,7 @@ void main() async {
   // Launch UI immediately so the user NEVER gets stuck on a black screen!
   runApp(const GoldAlertApp());
 
-  // Spin up asynchronous network, notification, and background tasks in parallel
+  // Spin up asynchronous network and notification services in parallel
   Future.microtask(() async {
     try {
       await NotificationService().initialize().timeout(const Duration(seconds: 15));
@@ -57,11 +56,7 @@ void main() async {
     }
 
     try {
-      await OneSignalService().initialize().timeout(const Duration(seconds: 10));
-    } catch (_) {}
-
-    try {
-      await BackgroundService().initialize().timeout(const Duration(seconds: 10));
+      await BackgroundService().stopService();
     } catch (_) {}
 
     try {
