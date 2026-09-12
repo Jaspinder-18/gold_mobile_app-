@@ -184,6 +184,46 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  /// Reset Password
+  Future<Map<String, dynamic>> resetPassword({
+    required String email,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    try {
+      final serverUrl = await _resolveServerUrl();
+      final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+
+      final response = await http.post(
+        Uri.parse('$cleanUrl/api/auth/reset-password'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'email': email.trim().toLowerCase(),
+          'newPassword': newPassword,
+          'confirmPassword': confirmPassword,
+        }),
+      ).timeout(const Duration(seconds: 12));
+
+      final body = json.decode(response.body);
+      if (response.statusCode >= 200 && response.statusCode < 300 && body['success'] == true) {
+        final userData = body['data']?['user'] ?? body['data'];
+        final sessionToken = body['data']?['token']?.toString();
+
+        _currentUser = UserModel.fromJson(userData, sessionToken: sessionToken);
+        await _persistSession(_currentUser!, sessionToken);
+        _syncTokenInBackground();
+
+        notifyListeners();
+        return {'success': true, 'message': body['message'] ?? 'Password reset successfully!'};
+      } else {
+        return {'success': false, 'error': body['error'] ?? 'Reset password failed.'};
+      }
+    } catch (e) {
+      debugPrint('[AuthService] Reset password exception: $e');
+      return {'success': false, 'error': 'Network connection error. Please verify server connectivity.'};
+    }
+  }
+
   Future<void> _persistSession(UserModel user, String? token) async {
     try {
       final prefs = await SharedPreferences.getInstance();

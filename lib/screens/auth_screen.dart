@@ -339,13 +339,176 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
                   ),
           ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 8),
+
+        // Forgot / Reset Password Button
+        Center(
+          child: TextButton(
+            onPressed: _showResetPasswordDialog,
+            child: const Text(
+              'Forgot Password? Reset Here',
+              style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11.5, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
         const Text(
           '📱 Your device will automatically pair with your account for 24/7 push notifications & loud price touch alarms.',
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.white38, fontSize: 10, height: 1.4),
         ),
       ],
+    );
+  }
+
+  void _showResetPasswordDialog() {
+    final emailCtrl = TextEditingController(text: _loginEmailController.text.trim());
+    final newPassCtrl = TextEditingController();
+    final confirmPassCtrl = TextEditingController();
+    String? dialogError;
+    bool isResetting = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF0F172A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF1E293B)),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.lock_reset, color: Color(0xFFF59E0B), size: 22),
+              SizedBox(width: 8),
+              Text(
+                'Reset Password',
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (dialogError != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
+                    ),
+                    child: Text(dialogError!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 11)),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                TextField(
+                  controller: emailCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Account Email',
+                    labelStyle: const TextStyle(color: Colors.white60, fontSize: 12),
+                    filled: true,
+                    fillColor: const Color(0xFF070A12),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: newPassCtrl,
+                  obscureText: true,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'New Password (min 6 chars)',
+                    labelStyle: const TextStyle(color: Colors.white60, fontSize: 12),
+                    filled: true,
+                    fillColor: const Color(0xFF070A12),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: confirmPassCtrl,
+                  obscureText: true,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Confirm New Password',
+                    labelStyle: const TextStyle(color: Colors.white60, fontSize: 12),
+                    filled: true,
+                    fillColor: const Color(0xFF070A12),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('CANCEL', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFF59E0B),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: isResetting
+                  ? null
+                  : () async {
+                      final email = emailCtrl.text.trim();
+                      final pass = newPassCtrl.text;
+                      final conf = confirmPassCtrl.text;
+                      if (email.isEmpty || pass.isEmpty) {
+                        setDialogState(() => dialogError = 'Please fill all fields.');
+                        return;
+                      }
+                      if (pass.length < 6) {
+                        setDialogState(() => dialogError = 'Password must be at least 6 characters.');
+                        return;
+                      }
+                      if (pass != conf) {
+                        setDialogState(() => dialogError = 'Passwords do not match.');
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isResetting = true;
+                        dialogError = null;
+                      });
+
+                      final res = await AuthService().resetPassword(
+                        email: email,
+                        newPassword: pass,
+                        confirmPassword: conf,
+                      );
+
+                      if (ctx.mounted) {
+                        setDialogState(() => isResetting = false);
+                        if (res['success'] == true) {
+                          Navigator.of(ctx).pop();
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                backgroundColor: Color(0xFF10B981),
+                                content: Text('✓ Password reset successfully! Logged in.'),
+                              ),
+                            );
+                            _navigateToHome();
+                          }
+                        } else {
+                          setDialogState(() => dialogError = res['error']?.toString() ?? 'Reset failed.');
+                        }
+                      }
+                    },
+              child: isResetting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                  : const Text('RESET & LOGIN', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
