@@ -3,7 +3,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/market_data.dart';
 import '../services/audio_service.dart';
 import '../services/notification_service.dart';
+import '../services/onesignal_service.dart';
 import '../services/socket_service.dart';
+import '../services/auth_service.dart';
+import 'auth_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VoidCallback? onBackToMonitor;
@@ -16,6 +19,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _serverUrlController = TextEditingController();
   final _customTargetPriceController = TextEditingController();
+  final _onesignalAppIdController = TextEditingController();
 
   final _audioService = AudioService();
   final _socketService = SocketService();
@@ -44,9 +48,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadCurrentConfig();
   }
 
-  void _loadCurrentConfig() {
+  void _loadCurrentConfig() async {
     final cfg = _socketService.currentConfig;
     _serverUrlController.text = _socketService.serverUrl;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _onesignalAppIdController.text = prefs.getString('onesignal_app_id') ?? '';
+    } catch (_) {}
 
     _customPriceAlertEnabled = cfg.customPriceAlertEnabled;
     _customTargetPriceController.text = cfg.customPriceAlertTarget > 0 ? cfg.customPriceAlertTarget.toStringAsFixed(2) : '';
@@ -60,6 +69,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _selectedTimeframe = AppTimeframe.fromString(cfg.chartTimeframe);
     _selectedRange = AppChartRange.fromString(cfg.chartRange);
     _selectedBarSpacing = AppBarSpacing.fromValue(cfg.barSpacing);
+    if (mounted) setState(() {});
   }
 
   @override
@@ -67,6 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _audioService.stop();
     _serverUrlController.dispose();
     _customTargetPriceController.dispose();
+    _onesignalAppIdController.dispose();
     super.dispose();
   }
 
@@ -82,7 +93,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _audioService.setSoundEnabled(_soundEnabled);
       await _audioService.setVibrationEnabled(_vibrationEnabled);
 
-      // 2. Update server URL if changed FIRST
+      // 2. Save OneSignal App ID
+      if (_onesignalAppIdController.text.trim().isNotEmpty) {
+        await OneSignalService().setAppId(_onesignalAppIdController.text.trim());
+      }
+
+      // 3. Update server URL if changed FIRST
       final newUrl = _serverUrlController.text.trim();
       if (newUrl.isNotEmpty && newUrl != _socketService.serverUrl) {
         await _socketService.updateServerUrl(newUrl);
@@ -218,6 +234,144 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _handleTestFcmPush() async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        backgroundColor: Color(0xFF3B82F6),
+        duration: Duration(seconds: 4),
+        content: Text('⏳ Dispatching FCM Cloud Push in 3 seconds... Close the app or lock phone NOW to test!'),
+      ),
+    );
+
+    await Future.delayed(const Duration(seconds: 3));
+    final success = await _notificationService.sendFcmTestPush(serverUrl: _serverUrlController.text.trim());
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+          content: Text(
+            success
+                ? '🔥 Firebase Push Dispatched! Alarm should ring on your phone.'
+                : 'Failed to dispatch FCM push. Check server URL or Firebase key.',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFF1E293B)),
+        ),
+        title: const Text('Confirm Logout', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+        content: const Text('Are you sure you want to log out from this device?', style: TextStyle(color: Colors.white70, fontSize: 13)),
+        actions: [
+          TextButton(
+            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+            onPressed: () => Navigator.pop(ctx, false),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            child: const Text('Logout', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            onPressed: () => Navigator.pop(ctx, true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await AuthService().logout();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const AuthScreen()),
+          (route) => false,
+        );
+      }
+    }
+  }
+
+  Widget _buildUserProfileCard() {
+    final user = AuthService().currentUser;
+    final name = user?.fullName ?? 'Trader';
+    final email = user?.email ?? 'Not signed in';
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : 'T';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: const Color(0xFFF59E0B),
+            child: Text(
+              initial,
+              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 18),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  email,
+                  style: const TextStyle(color: Colors.white60, fontSize: 11),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF10B981),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      'Account Active · Device Paired',
+                      style: TextStyle(color: Colors.greenAccent.shade400, fontSize: 10, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFFEF4444)),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            icon: const Icon(Icons.logout, color: Color(0xFFEF4444), size: 14),
+            label: const Text(
+              'LOGOUT',
+              style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.w900),
+            ),
+            onPressed: _handleLogout,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final livePrice = _socketService.currentTick?.price ?? 3448.20;
@@ -265,16 +419,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         children: [
-          // 1. QUICK ALERT ENGINE TEST BANNER
-          _buildTestBanner(),
+          // 1. USER ACCOUNT & ACTIVE DEVICE STATUS
+          _buildSectionHeader('👤 TRADER ACCOUNT & DEVICE PAIRING'),
+          _buildUserProfileCard(),
 
           const SizedBox(height: 12),
 
-          // 2. CHART SETTINGS CARD (Timeframe, Chart Range, Bar Spacing)
-          _buildSectionHeader('📊 CHART SETTINGS'),
-          _buildChartSettingsCard(),
+          // 2. QUICK ALERT ENGINE TEST BANNER
+          _buildTestBanner(),
 
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
 
           // 3. CUSTOM PRICE ALERT CARD
           _buildSectionHeader('🎯 CUSTOM PRICE ALERT'),
@@ -288,9 +442,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           const SizedBox(height: 14),
 
-          // 5. ANDROID BACKGROUND & BATTERY SECURITY BYPASS
-          _buildSectionHeader('⚡ ANDROID BACKGROUND & BATTERY BYPASS (24/7 ALARMS)'),
-          _buildAndroidSecurityBypassCard(),
+          // 5. CHART SETTINGS CARD (Timeframe, Chart Range, Bar Spacing)
+          _buildSectionHeader('📊 CHART SETTINGS'),
+          _buildChartSettingsCard(),
 
           const SizedBox(height: 14),
 
@@ -363,27 +517,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  icon: const Icon(Icons.volume_up, size: 14, color: Colors.white),
+                  icon: const Icon(Icons.volume_up, size: 13, color: Colors.white),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFEF4444),
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
                   onPressed: _handleTestAlarmAndNotification,
-                  label: const Text('LOCAL TEST', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11)),
+                  label: const Text('LOCAL ALARM', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10)),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Expanded(
                 child: ElevatedButton.icon(
-                  icon: const Icon(Icons.cloud_upload, size: 14, color: Colors.black),
+                  icon: const Icon(Icons.cloud_upload, size: 13, color: Colors.black),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFF59E0B),
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
                   onPressed: _handleTestServerAlert,
-                  label: const Text('SERVER TEST', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11)),
+                  label: const Text('SERVER ALERT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 10)),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.notifications_active, size: 13, color: Colors.white),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF3B82F6),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: _handleTestFcmPush,
+                  label: const Text('FCM PUSH', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10)),
                 ),
               ),
             ],
@@ -1167,6 +1334,124 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildChecklistItem('2. Set Battery Saver to "No Restrictions".'),
                 _buildChecklistItem('3. Allow "Display pop-up windows while running in background".'),
                 _buildChecklistItem('4. Allow "Show on Lock screen" notifications.'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOneSignalAndTelegramCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1E293B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // OneSignal section
+          const Row(
+            children: [
+              Icon(Icons.cell_tower, color: Color(0xFF10B981), size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'OneSignal Cloud Push (Works on Closed App)',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'OneSignal pushes price alerts to closed apps and locked screens with zero private key issues.',
+            style: TextStyle(color: Colors.white60, fontSize: 10),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _onesignalAppIdController,
+            style: const TextStyle(color: Colors.white, fontSize: 12, fontFamily: 'monospace'),
+            decoration: InputDecoration(
+              labelText: 'OneSignal App ID',
+              labelStyle: const TextStyle(color: Colors.white70, fontSize: 11),
+              hintText: 'e.g. b2f7f966-d8cc-11e4-bed1-df8f05be55ba',
+              hintStyle: const TextStyle(color: Colors.white24, fontSize: 11),
+              filled: true,
+              fillColor: const Color(0xFF070A12),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF10B981))),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.check, size: 14, color: Colors.white),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () async {
+                    final cleanId = _onesignalAppIdController.text.trim();
+                    if (cleanId.isNotEmpty) {
+                      await OneSignalService().setAppId(cleanId);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(backgroundColor: Color(0xFF10B981), content: Text('✓ OneSignal App ID Saved & Connected!')),
+                        );
+                      }
+                    }
+                  },
+                  label: const Text('SAVE APP ID', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          const Divider(color: Color(0xFF1E293B)),
+          const SizedBox(height: 8),
+          // Telegram section
+          const Row(
+            children: [
+              Icon(Icons.send_rounded, color: Color(0xFF38BDF8), size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Telegram Instant Push Bot',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Receive instant push alerts with TradingView chart screenshots directly in Telegram.',
+            style: TextStyle(color: Colors.white60, fontSize: 10),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF070A12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF1E293B)),
+            ),
+            child: const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('• Bot: @MINITRADEZ_BOT', style: TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 11)),
+                SizedBox(height: 2),
+                Text('• Target Chat ID: -5428923029 (tradtest)', style: TextStyle(color: Colors.white70, fontSize: 10, fontFamily: 'monospace')),
+                SizedBox(height: 2),
+                Text('• Status: 🟢 ACTIVE (Delivers screenshots on every touch)', style: TextStyle(color: Color(0xFF10B981), fontSize: 10, fontWeight: FontWeight.bold)),
               ],
             ),
           ),

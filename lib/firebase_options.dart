@@ -34,28 +34,28 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyD-placeholder-key-for-web-fcm',
-    appId: '1:114409035526:web:b2089e9f93539281a70014',
-    messagingSenderId: '114409035526',
-    projectId: 'telichat-4c031',
-    authDomain: 'telichat-4c031.firebaseapp.com',
-    storageBucket: 'telichat-4c031.appspot.com',
+    apiKey: 'AIzaSyDBXUjucFx4R-Ydvx2S_buZh3aNiq-EuwQ',
+    appId: '1:395068005465:web:b2089e9f93539281a70014',
+    messagingSenderId: '395068005465',
+    projectId: 'alert-96e3b',
+    authDomain: 'alert-96e3b.firebaseapp.com',
+    storageBucket: 'alert-96e3b.firebasestorage.app',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyBuFzYj56GNPcUsm38DHQ92fsPxivq5gic',
-    appId: '1:309157910778:android:6de9f4b8809a9c1e34d143',
-    messagingSenderId: '309157910778',
-    projectId: 'telichat-4c031',
-    storageBucket: 'telichat-4c031.firebasestorage.app',
+    apiKey: 'AIzaSyDBXUjucFx4R-Ydvx2S_buZh3aNiq-EuwQ',
+    appId: '1:395068005465:android:f2b83a12b595452d582548',
+    messagingSenderId: '395068005465',
+    projectId: 'alert-96e3b',
+    storageBucket: 'alert-96e3b.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyD-placeholder-key-for-ios-fcm',
-    appId: '1:114409035526:ios:b2089e9f93539281a70014',
-    messagingSenderId: '114409035526',
-    projectId: 'telichat-4c031',
-    storageBucket: 'telichat-4c031.appspot.com',
+    apiKey: 'AIzaSyDBXUjucFx4R-Ydvx2S_buZh3aNiq-EuwQ',
+    appId: '1:395068005465:ios:b2089e9f93539281a70014',
+    messagingSenderId: '395068005465',
+    projectId: 'alert-96e3b',
+    storageBucket: 'alert-96e3b.firebasestorage.app',
     iosBundleId: 'com.gold.alert.goldMobileApp',
   );
 }

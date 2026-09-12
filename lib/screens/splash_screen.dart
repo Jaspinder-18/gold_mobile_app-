@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/notification_service.dart';
 import '../services/socket_service.dart';
+import '../services/auth_service.dart';
 import 'home_screen.dart';
+import 'auth_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -61,6 +63,11 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   Future<void> _startAppSequence() async {
     _progressController.forward();
 
+    bool hasAuthSession = false;
+    try {
+      hasAuthSession = await AuthService().loadSavedSession().timeout(const Duration(milliseconds: 1500));
+    } catch (_) {}
+
     try {
       await SocketService().fetchInitialData().timeout(const Duration(milliseconds: 1500));
     } catch (_) {}
@@ -77,7 +84,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
           transitionDuration: const Duration(milliseconds: 700),
           pageBuilder: (context, animation, secondaryAnimation) => FadeTransition(
             opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
-            child: const HomeScreen(),
+            child: hasAuthSession ? const HomeScreen() : const AuthScreen(),
           ),
         ),
       );

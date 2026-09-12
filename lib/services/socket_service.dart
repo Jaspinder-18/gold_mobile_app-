@@ -280,6 +280,11 @@ class SocketService with WidgetsBindingObserver {
                   .map((i) => PriceAlertModel.fromJson(Map<String, dynamic>.from(i as Map)))
                   .toList();
               onActiveAlertsUpdate?.call(activeAlerts);
+              BackgroundService().updateCustomAlert(
+                symbol: activeSymbol,
+                targetPrice: activeAlerts.isNotEmpty ? activeAlerts.first.targetPrice : 0.0,
+                enabled: activeAlerts.isNotEmpty,
+              );
             } else {
               fetchActiveAlerts();
             }
@@ -426,6 +431,11 @@ class SocketService with WidgetsBindingObserver {
           activeAlerts.removeWhere((a) => a.id == newAlert.id);
           activeAlerts.insert(0, newAlert);
           onActiveAlertsUpdate?.call(activeAlerts);
+          BackgroundService().updateCustomAlert(
+            symbol: activeSymbol,
+            targetPrice: targetPrice,
+            enabled: true,
+          );
           return true;
         }
       }
@@ -445,6 +455,11 @@ class SocketService with WidgetsBindingObserver {
       if (res.statusCode == 200) {
         activeAlerts.removeWhere((a) => a.id == alertId);
         onActiveAlertsUpdate?.call(activeAlerts);
+        BackgroundService().updateCustomAlert(
+          symbol: activeSymbol,
+          targetPrice: activeAlerts.isNotEmpty ? activeAlerts.first.targetPrice : 0.0,
+          enabled: activeAlerts.isNotEmpty,
+        );
         return true;
       }
     } catch (e) {
@@ -453,7 +468,7 @@ class SocketService with WidgetsBindingObserver {
     return false;
   }
 
-  /// Clear all active alerts for current symbol
+  /// Clear all active custom alerts for the active symbol
   Future<bool> clearAllCustomAlerts() async {
     try {
       final res = await http.post(
@@ -465,6 +480,11 @@ class SocketService with WidgetsBindingObserver {
       if (res.statusCode == 200) {
         activeAlerts.clear();
         onActiveAlertsUpdate?.call(activeAlerts);
+        BackgroundService().updateCustomAlert(
+          symbol: activeSymbol,
+          targetPrice: 0.0,
+          enabled: false,
+        );
         return true;
       }
     } catch (e) {

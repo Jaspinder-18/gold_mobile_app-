@@ -5,10 +5,12 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart' hide NotificationVisibility;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import '../models/market_data.dart';
 import 'audio_service.dart';
 
+/// Top-level background message handler for FCM
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
@@ -23,10 +25,28 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     const initSettings = InitializationSettings(android: androidSettings);
     await flutterLocalNotificationsPlugin.initialize(initSettings);
 
+    final androidImpl = flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (androidImpl != null) {
+      final alarmChannel = AndroidNotificationChannel(
+        'gold_price_alerts_v5',
+        '🚨 High Priority Price Level Alarms',
+        description: 'Loud alarm clock notifications for market price touches',
+        importance: Importance.max,
+        playSound: true,
+        sound: const RawResourceAndroidNotificationSound('alarm_clock'),
+        enableVibration: true,
+        vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+        enableLights: true,
+        showBadge: true,
+      );
+      await androidImpl.createNotificationChannel(alarmChannel);
+    }
+
     final data = message.data;
     final symbol = data['symbol']?.toString() ?? 'XAUUSD';
     final targetPrice = double.tryParse(data['targetPrice']?.toString() ?? '0') ?? 0.0;
-    final currentPrice = double.tryParse(data['currentPrice']?.toString() ?? '0') ?? targetPrice;
+    final currentPrice = double.tryParse(data['currentPrice']?.toString() ?? data['touchedPrice']?.toString() ?? '0') ?? targetPrice;
     final level = data['level']?.toString() ?? 'CUSTOM';
     final screenshotUrl = data['screenshotUrl']?.toString() ?? '';
 
@@ -41,7 +61,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     final notificationId = (level.hashCode ^ symbol.hashCode ^ (DateTime.now().second)).abs() % 100000;
 
     final androidDetails = AndroidNotificationDetails(
-      'gold_alarm_channel_v4',
+      'gold_price_alerts_v5',
       '🚨 High Priority Price Level Alarms',
       channelDescription: 'Loud alarm clock notifications for market price touches',
       importance: Importance.max,
@@ -83,19 +103,60 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
-  Function(String?)? onNotificationTap;
+  Function(String?)? _onNotificationTap;
+  String? _pendingPayload;
   bool _isInitialized = false;
   bool _hasPermission = false;
   String? _fcmToken;
   final Map<String, int> _recentHandledAlerts = {};
 
+  static const String channelId = 'gold_price_alerts_v5';
+  static const String channelName = '🚨 High Priority Price Level Alarms';
+  static const String channelDescription = 'Loud alarm clock notifications for market price touches';
+
   bool get hasPermission => _hasPermission;
   String? get fcmToken => _fcmToken;
+  String? get pendingPayload => _pendingPayload;
+
+  Function(String?)? get onNotificationTap => _onNotificationTap;
+  set onNotificationTap(Function(String?)? handler) {
+    _onNotificationTap = handler;
+    if (handler != null && _pendingPayload != null) {
+      final payload = _pendingPayload;
+      _pendingPayload = null;
+      Future.delayed(const Duration(milliseconds: 300), () {
+        handler(payload);
+      });
+    }
+  }
 
   void recordRecentAlert(String alertId) {
     if (alertId.isNotEmpty) {
       _recentHandledAlerts[alertId] = DateTime.now().millisecondsSinceEpoch;
     }
+  }
+
+  void _handlePayload(String? payload) {
+    if (payload == null || payload.isEmpty) return;
+    if (_onNotificationTap != null) {
+      _onNotificationTap?.call(payload);
+    } else {
+      _pendingPayload = payload;
+    }
+  }
+
+  Future<String> _resolveServerUrl(String? serverUrl) async {
+    if (serverUrl != null && serverUrl.trim().isNotEmpty) {
+      return serverUrl.trim();
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedUrl = prefs.getString('server_url');
+      if (savedUrl != null && savedUrl.trim().isNotEmpty) {
+        return savedUrl.trim();
+      }
+    } catch (_) {}
+    return 'https://gold-server-dbbq.onrender.com';
   }
 
   Future<void> initialize({String? serverUrl}) async {
@@ -115,21 +176,15 @@ class NotificationService {
     await _notificationsPlugin.initialize(
       initSettings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
-        if (onNotificationTap != null) {
-          try {
-            onNotificationTap?.call(response.payload);
-          } catch (e) {
-            debugPrint('[NotificationService] onNotificationTap error: $e');
-          }
-        }
+        _handlePayload(response.payload);
       },
     );
 
     // 1. Loud Alarm Notification Channel with raw resource sound & full screen priority
     final alarmChannel = AndroidNotificationChannel(
-      'gold_alarm_channel_v4',
-      '🚨 High Priority Price Level Alarms',
-      description: 'Loud alarm clock sound & high priority notifications for market price touches',
+      channelId,
+      channelName,
+      description: channelDescription,
       importance: Importance.max,
       playSound: true,
       sound: const RawResourceAndroidNotificationSound('alarm_clock'),
@@ -139,7 +194,7 @@ class NotificationService {
       showBadge: true,
     );
 
-    // 2. Standard High-Priority Channel
+    // 2. Standard High-Priority Channel fallback
     final standardChannel = AndroidNotificationChannel(
       'gold_alerts_channel_standard',
       '🔔 Market Price Touch Alerts',
@@ -157,9 +212,19 @@ class NotificationService {
     if (androidImpl != null) {
       await androidImpl.createNotificationChannel(alarmChannel);
       await androidImpl.createNotificationChannel(standardChannel);
+      try {
+        final granted = await androidImpl.requestNotificationsPermission();
+        _hasPermission = granted ?? false;
+      } catch (_) {}
+      try {
+        final isIgnoring = await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+        if (!isIgnoring) {
+          await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+        }
+      } catch (_) {}
     }
 
-    // 3. Initialize Firebase Messaging
+    // 3. Initialize Firebase Messaging & Token Registration
     await _initFirebaseMessaging(serverUrl: serverUrl);
 
     _isInitialized = true;
@@ -188,6 +253,7 @@ class NotificationService {
 
       _hasPermission = settings.authorizationStatus == AuthorizationStatus.authorized ||
           settings.authorizationStatus == AuthorizationStatus.provisional;
+      debugPrint('[FCM] Notification authorization status: ${settings.authorizationStatus}');
 
       // Subscribe to topics
       try {
@@ -197,28 +263,29 @@ class NotificationService {
         debugPrint('[NotificationService] Topic subscription note: $e');
       }
 
-      // Get FCM Token
+      // Get FCM Token and immediately register with backend
+      final resolvedUrl = await _resolveServerUrl(serverUrl);
       try {
         _fcmToken = await messaging.getToken();
-        debugPrint('[NotificationService] FCM Token retrieved: $_fcmToken');
-        if (_fcmToken != null && serverUrl != null) {
-          await registerTokenWithServer(serverUrl, _fcmToken!);
+        debugPrint('[FCM] Token received: $_fcmToken');
+        if (_fcmToken != null && _fcmToken!.isNotEmpty) {
+          await registerTokenWithServer(resolvedUrl, _fcmToken!);
         }
       } catch (e) {
-        debugPrint('[NotificationService] getToken note: $e');
+        debugPrint('[FCM] getToken note: $e');
       }
 
       // Listen to token refreshes
-      messaging.onTokenRefresh.listen((newToken) {
+      messaging.onTokenRefresh.listen((newToken) async {
         _fcmToken = newToken;
-        if (serverUrl != null) {
-          registerTokenWithServer(serverUrl, newToken);
-        }
+        debugPrint('[FCM] Token refreshed: $newToken');
+        final currentUrl = await _resolveServerUrl(null);
+        await registerTokenWithServer(currentUrl, newToken);
       });
 
       // Foreground message handler (deduplicated against Socket.IO)
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        debugPrint('[NotificationService] Foreground FCM message received: ${message.data}');
+        debugPrint('[FCM] Foreground message received: ${message.data}');
         final data = message.data;
         final alertId = data['alertId']?.toString() ?? message.messageId ?? '';
         final now = DateTime.now().millisecondsSinceEpoch;
@@ -236,7 +303,7 @@ class NotificationService {
 
         final symbol = data['symbol']?.toString() ?? 'XAUUSD';
         final targetPrice = double.tryParse(data['targetPrice']?.toString() ?? '0') ?? 0.0;
-        final currentPrice = double.tryParse(data['currentPrice']?.toString() ?? '0') ?? targetPrice;
+        final currentPrice = double.tryParse(data['currentPrice']?.toString() ?? data['touchedPrice']?.toString() ?? '0') ?? targetPrice;
         final level = data['level']?.toString() ?? 'CUSTOM';
         final screenshotUrl = data['screenshotUrl']?.toString() ?? '';
 
@@ -261,30 +328,22 @@ class NotificationService {
 
       // When notification opened from background
       FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-        debugPrint('[NotificationService] FCM Notification clicked to open app: ${message.data}');
+        debugPrint('[FCM] Notification opened from background: ${message.data}');
         final payload = message.data['screenshotUrl'] ?? message.data['alertId'];
-        if (payload != null && onNotificationTap != null) {
-          onNotificationTap?.call(payload.toString());
-        }
+        _handlePayload(payload?.toString());
       });
 
       // When app opened from TERMINATED / FULLY CLOSED state via notification tap
       try {
         final initialMsg = await messaging.getInitialMessage();
         if (initialMsg != null) {
-          debugPrint('[NotificationService] App launched from terminated state via FCM: ${initialMsg.data}');
+          debugPrint('[FCM] Notification opened from terminated state: ${initialMsg.data}');
           final payload = initialMsg.data['screenshotUrl'] ?? initialMsg.data['alertId'];
-          if (payload != null) {
-            Future.delayed(const Duration(milliseconds: 600), () {
-              onNotificationTap?.call(payload.toString());
-            });
-          }
+          _handlePayload(payload?.toString());
         }
       } catch (e) {
-        debugPrint('[NotificationService] getInitialMessage error: $e');
+        debugPrint('[FCM] getInitialMessage error: $e');
       }
-
-      FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
     } catch (e) {
       debugPrint('[NotificationService] Firebase Messaging init exception: $e');
     }
@@ -292,9 +351,10 @@ class NotificationService {
 
   /// Register FCM Token with backend server
   Future<void> registerTokenWithServer(String serverUrl, String token) async {
+    if (token.isEmpty) return;
     try {
       final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-      await http.post(
+      final response = await http.post(
         Uri.parse('$cleanUrl/api/alerts/fcm/register'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
@@ -304,9 +364,41 @@ class NotificationService {
           'symbolSubscriptions': ['ALL']
         }),
       ).timeout(const Duration(seconds: 5));
-      debugPrint('[NotificationService] ✓ Registered FCM token with server.');
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        debugPrint('[FCM] Token registered with backend: $cleanUrl');
+      } else {
+        debugPrint('[FCM] Token registration response status: ${response.statusCode}');
+      }
     } catch (e) {
-      debugPrint('[NotificationService] registerTokenWithServer error: $e');
+      debugPrint('[FCM] Token registration error: $e');
+    }
+  }
+
+  /// Dispatch a test push notification to this device via FCM backend
+  Future<bool> sendFcmTestPush({String? serverUrl}) async {
+    try {
+      final resolvedUrl = await _resolveServerUrl(serverUrl);
+      final cleanUrl = resolvedUrl.replaceAll(RegExp(r'/+$'), '');
+
+      // Ensure token is fetched and registered
+      if (_fcmToken == null || _fcmToken!.isEmpty) {
+        try {
+          _fcmToken = await FirebaseMessaging.instance.getToken();
+        } catch (_) {}
+      }
+
+      final response = await http.post(
+        Uri.parse('$cleanUrl/api/alerts/fcm/test'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'token': _fcmToken,
+        }),
+      ).timeout(const Duration(seconds: 8));
+
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      debugPrint('[NotificationService] sendFcmTestPush error: $e');
+      return false;
     }
   }
 
@@ -319,7 +411,7 @@ class NotificationService {
         final granted = await androidImpl.requestNotificationsPermission();
         _hasPermission = granted ?? false;
 
-        // Automatically request ignoring battery optimization to bypass Android Doze mode
+        // Request ignoring battery optimization
         try {
           final isIgnoring = await FlutterForegroundTask.isIgnoringBatteryOptimizations;
           if (!isIgnoring) {
@@ -414,9 +506,9 @@ class NotificationService {
 
     try {
       final androidDetails = AndroidNotificationDetails(
-        'gold_alarm_channel_v4',
-        '🚨 High Priority Price Level Alarms',
-        channelDescription: 'Loud alarm clock notifications for market price touches',
+        channelId,
+        channelName,
+        channelDescription: channelDescription,
         importance: Importance.max,
         priority: Priority.max,
         fullScreenIntent: true,

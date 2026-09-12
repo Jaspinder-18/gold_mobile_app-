@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart' hide NotificationVisibility;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 
 @pragma('vm:entry-point')
 void startCallback() {
@@ -11,6 +14,8 @@ void startCallback() {
 class MarketAlertTaskHandler extends TaskHandler {
   String _serverUrl = 'https://gold-server-dbbq.onrender.com';
   String _activeSymbol = 'XAUUSD';
+  double _previousPrice = 0.0;
+  final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -18,6 +23,10 @@ class MarketAlertTaskHandler extends TaskHandler {
       final prefs = await SharedPreferences.getInstance();
       _serverUrl = prefs.getString('server_url') ?? 'https://gold-server-dbbq.onrender.com';
       _activeSymbol = prefs.getString('active_symbol') ?? 'XAUUSD';
+
+      const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+      const initSettings = InitializationSettings(android: androidSettings);
+      await _notificationsPlugin.initialize(initSettings);
     } catch (e) {
       debugPrint('[BackgroundService] onStart error: $e');
     }
@@ -30,13 +39,82 @@ class MarketAlertTaskHandler extends TaskHandler {
       _serverUrl = prefs.getString('server_url') ?? _serverUrl;
       _activeSymbol = prefs.getString('active_symbol') ?? _activeSymbol;
 
-      // Keep foreground notification refreshed with active symbol
-      FlutterForegroundTask.updateService(
-        notificationTitle: '📊 Gold & Multi-Asset Terminal',
-        notificationText: '$_activeSymbol · Real-time market data & Firebase alerts active',
-      );
+      final symKey = _activeSymbol.toUpperCase();
+      final targetPrice = prefs.getDouble('custom_target_price_$symKey') ?? 0.0;
+      final enabled = prefs.getBool('custom_price_alert_enabled_$symKey') ?? false;
+
+      // 1. Fetch live market price directly from server in background task
+      final cleanUrl = _serverUrl.replaceAll(RegExp(r'/+$'), '');
+      final res = await http
+          .get(Uri.parse('$cleanUrl/api/market/latest?symbol=$_activeSymbol'))
+          .timeout(const Duration(seconds: 4));
+
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        final priceData = data['data'] ?? data;
+        final currentPrice = double.tryParse(priceData['price']?.toString() ?? '0') ?? 0.0;
+
+        if (currentPrice > 0) {
+          // Keep foreground service notification updated with live market price
+          FlutterForegroundTask.updateService(
+            notificationTitle: '📊 $_activeSymbol · \$${currentPrice.toStringAsFixed(2)}',
+            notificationText: enabled && targetPrice > 0
+                ? 'Target: \$${targetPrice.toStringAsFixed(2)} · Live Alarm Guard Active'
+                : 'Market Alert Monitor Active',
+          );
+
+          // 2. Evaluate price touch against active custom target
+          if (enabled && targetPrice > 0) {
+            const tolerance = 0.25;
+            final diff = (currentPrice - targetPrice).abs();
+            final isTouching = diff <= tolerance;
+            final crossedUp = _previousPrice > 0 && _previousPrice < targetPrice && currentPrice >= targetPrice;
+            final crossedDown = _previousPrice > 0 && _previousPrice > targetPrice && currentPrice <= targetPrice;
+
+            if (isTouching || crossedUp || crossedDown) {
+              debugPrint('[BackgroundService] 🚨 TARGET PRICE TOUCHED IN BACKGROUND: $_activeSymbol @ \$$currentPrice (Target: \$$targetPrice)');
+
+              // Disarm in SharedPreferences to prevent repeated alarms
+              await prefs.setBool('custom_price_alert_enabled_$symKey', false);
+
+              // 3. Fire High-Priority System Alarm Notification with Loud Sound & Vibration
+              final androidDetails = AndroidNotificationDetails(
+                'gold_price_alerts_v5',
+                '🚨 High Priority Price Level Alarms',
+                channelDescription: 'Loud alarm clock notifications for market price touches',
+                importance: Importance.max,
+                priority: Priority.max,
+                fullScreenIntent: true,
+                playSound: true,
+                sound: const RawResourceAndroidNotificationSound('alarm_clock'),
+                enableVibration: true,
+                vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+                enableLights: true,
+                category: AndroidNotificationCategory.alarm,
+                audioAttributesUsage: AudioAttributesUsage.alarm,
+                visibility: NotificationVisibility.public,
+                styleInformation: BigTextStyleInformation(
+                  'Target: \$${targetPrice.toStringAsFixed(2)} · Custom Price Alert Triggered · Tap to view live chart',
+                  contentTitle: '🚨 $_activeSymbol TOUCHED TARGET @ \$${currentPrice.toStringAsFixed(2)}',
+                  summaryText: '$_activeSymbol Alert Terminal',
+                ),
+              );
+
+              final notificationId = (_activeSymbol.hashCode ^ targetPrice.hashCode ^ DateTime.now().second).abs() % 100000;
+              await _notificationsPlugin.show(
+                notificationId,
+                '🚨 $_activeSymbol TOUCHED TARGET @ \$${currentPrice.toStringAsFixed(2)}',
+                'Target: \$${targetPrice.toStringAsFixed(2)} · Custom Price Alert Triggered',
+                NotificationDetails(android: androidDetails),
+                payload: 'alert_$notificationId',
+              );
+            }
+          }
+          _previousPrice = currentPrice;
+        }
+      }
     } catch (_) {
-      // Safe blip ignore
+      // Safe blip ignore during network transitions
     }
   }
 
@@ -86,7 +164,7 @@ class BackgroundService {
         playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(30000), // Check every 30s silently in background
+        eventAction: ForegroundTaskEventAction.repeat(5000), // Check every 5s for rapid touch alerts
         autoRunOnBoot: true,
         allowWakeLock: true,
         allowWifiLock: true,
@@ -144,9 +222,9 @@ class BackgroundService {
 
       if (await FlutterForegroundTask.isRunningService) {
         FlutterForegroundTask.updateService(
-          notificationTitle: '🚨 Gold & Multi-Asset Terminal',
+          notificationTitle: '📊 $symbol Live Guard Active',
           notificationText: enabled && targetPrice > 0
-              ? '$symbol Target: \$${targetPrice.toStringAsFixed(2)} (ACTIVE MONITORING)'
+              ? '$symbol Target: \$${targetPrice.toStringAsFixed(2)} (Active Alert Guard)'
               : '$symbol Live Feed Active',
         );
       }

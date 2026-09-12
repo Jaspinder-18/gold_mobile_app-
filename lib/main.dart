@@ -6,6 +6,7 @@ import 'firebase_options.dart';
 import 'screens/splash_screen.dart';
 import 'services/audio_service.dart';
 import 'services/notification_service.dart';
+import 'services/onesignal_service.dart';
 import 'services/socket_service.dart';
 import 'services/background_service.dart';
 
@@ -50,11 +51,17 @@ void main() async {
   // Spin up asynchronous network, notification, and background tasks in parallel
   Future.microtask(() async {
     try {
-      await NotificationService().initialize().timeout(const Duration(seconds: 3));
+      await NotificationService().initialize().timeout(const Duration(seconds: 15));
+    } catch (e) {
+      debugPrint('[Main] NotificationService init notice: $e');
+    }
+
+    try {
+      await OneSignalService().initialize().timeout(const Duration(seconds: 10));
     } catch (_) {}
 
     try {
-      await BackgroundService().initialize().timeout(const Duration(seconds: 3));
+      await BackgroundService().initialize().timeout(const Duration(seconds: 10));
     } catch (_) {}
 
     try {

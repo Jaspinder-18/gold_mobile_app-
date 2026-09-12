@@ -128,13 +128,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     NotificationService().onNotificationTap = (payload) {
       AudioService().stop();
       if (!mounted) return;
+      debugPrint('[HomeScreen] Notification tapped with payload: $payload');
+
+      AlertEvent? targetAlert;
       if (_alerts.isNotEmpty) {
-        final targetAlert = _alerts.firstWhere(
+        targetAlert = _alerts.firstWhere(
           (a) => a.screenshotPath == payload || a.id == payload,
           orElse: () => _alerts.first,
         );
-        _openScreenshotViewer(targetAlert);
+      } else {
+        targetAlert = AlertEvent(
+          id: 'payload_alert_${DateTime.now().millisecondsSinceEpoch}',
+          symbol: _socketService.activeSymbol,
+          displayName: '${_socketService.activeSymbol} Spot',
+          level: 'CUSTOM',
+          levelPrice: 0,
+          currentPrice: _socketService.currentTick?.price ?? 0,
+          tolerance: 0.20,
+          screenshotPath: (payload != null && (payload.startsWith('http') || payload.contains('.png') || payload.contains('.jpg'))) ? payload : '',
+          triggerReason: 'Price level alert triggered',
+          telegramStatus: 'SENT',
+          timestamp: DateTime.now(),
+          isTest: false,
+        );
       }
+
+      _showIncomingAlertDialog(targetAlert);
     };
   }
 
