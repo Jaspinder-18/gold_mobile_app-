@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
@@ -5,6 +6,7 @@ import '../models/market_data.dart';
 import '../services/socket_service.dart';
 import '../services/audio_service.dart';
 import '../services/notification_service.dart';
+import 'live_chart_screen.dart';
 import 'screenshot_viewer_screen.dart';
 import 'settings_screen.dart';
 
@@ -137,13 +139,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           orElse: () => _alerts.first,
         );
       } else {
+        String sym = _socketService.activeSymbol;
+        double price = _socketService.currentTick?.price ?? 0;
+        String lvl = 'CUSTOM';
+        if (payload != null && payload.startsWith('{')) {
+          try {
+            final map = json.decode(payload);
+            sym = map['symbol']?.toString() ?? sym;
+            price = double.tryParse(map['currentPrice']?.toString() ?? map['targetPrice']?.toString() ?? '') ?? price;
+            lvl = map['level']?.toString() ?? lvl;
+          } catch (_) {}
+        }
         targetAlert = AlertEvent(
           id: 'payload_alert_${DateTime.now().millisecondsSinceEpoch}',
-          symbol: _socketService.activeSymbol,
-          displayName: '${_socketService.activeSymbol} Spot',
-          level: 'CUSTOM',
-          levelPrice: 0,
-          currentPrice: _socketService.currentTick?.price ?? 0,
+          symbol: sym,
+          displayName: '$sym Spot',
+          level: lvl,
+          levelPrice: price,
+          currentPrice: price,
           tolerance: 0.20,
           screenshotPath: (payload != null && (payload.startsWith('http') || payload.contains('.png') || payload.contains('.jpg'))) ? payload : '',
           triggerReason: 'Price level alert triggered',
@@ -153,7 +166,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         );
       }
 
-      _showIncomingAlertDialog(targetAlert);
+      _openLiveChart(targetAlert);
     };
   }
 
@@ -531,7 +544,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           AudioService().stop();
                           _isAlertDialogOpen = false;
                           Navigator.of(dialogCtx).pop();
-                          _openScreenshotViewer(event);
+                          _openLiveChart(event);
                         },
                         icon: const Icon(Icons.candlestick_chart_rounded, size: 18, color: Colors.black),
                         label: const Text(
@@ -571,7 +584,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return '${_socketService.serverUrl}$path';
   }
 
+  void _openLiveChart(AlertEvent event) async {
+    AudioService().stop();
+    if (_socketService.activeSymbol != event.symbol && event.symbol.isNotEmpty) {
+      await _socketService.switchSymbol(event.symbol);
+    }
+    if (mounted) {
+      setState(() => _currentTabIndex = 0);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => LiveChartScreen(
+            symbol: event.symbol.isNotEmpty ? event.symbol : _socketService.activeSymbol,
+            initialLevel: event.level,
+            initialTarget: event.levelPrice > 0 ? event.levelPrice : event.currentPrice,
+          ),
+        ),
+      );
+    }
+  }
+
   void _openScreenshotViewer(AlertEvent event) {
+    if (event.screenshotPath.isEmpty || (!event.screenshotPath.startsWith('http') && !event.screenshotPath.contains('.png'))) {
+      _openLiveChart(event);
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => ScreenshotViewerScreen(event: event)),
@@ -1482,20 +1519,48 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             )
           else
             Container(
-              height: 140,
+              height: 150,
               color: Colors.black,
               child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.photo_size_select_actual_outlined, color: Colors.white24, size: 32),
+                    const Icon(Icons.candlestick_chart_rounded, color: Color(0xFFF59E0B), size: 36),
                     const SizedBox(height: 6),
-                    const Text('No screenshot captured yet.', style: TextStyle(color: Colors.white54, fontSize: 11)),
-                    const SizedBox(height: 6),
-                    TextButton.icon(
-                      icon: const Icon(Icons.camera_alt, color: Color(0xFFF59E0B), size: 14),
-                      label: const Text('Capture Chart', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11)),
-                      onPressed: _handleManualCapture,
+                    Text(
+                      'Live Interactive Chart (${_socketService.activeSymbol})',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.show_chart, color: Colors.black, size: 16),
+                      label: const Text(
+                        'OPEN LIVE REAL-TIME CHART',
+                        style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFF59E0B),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: () {
+                        _openLiveChart(
+                          AlertEvent(
+                            id: 'live_manual',
+                            symbol: _socketService.activeSymbol,
+                            displayName: '${_socketService.activeSymbol} Spot',
+                            level: 'LIVE',
+                            levelPrice: _socketService.currentConfig.customPriceAlertTarget,
+                            currentPrice: _socketService.currentTick?.price ?? 0,
+                            tolerance: 0.20,
+                            screenshotPath: '',
+                            triggerReason: 'Live interactive chart view',
+                            telegramStatus: 'SENT',
+                            timestamp: DateTime.now(),
+                            isTest: false,
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),

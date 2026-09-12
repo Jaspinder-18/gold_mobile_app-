@@ -4,6 +4,7 @@ import 'package:photo_view/photo_view.dart';
 import 'package:intl/intl.dart';
 import '../models/market_data.dart';
 import '../services/socket_service.dart';
+import 'live_chart_screen.dart';
 
 class ScreenshotViewerScreen extends StatefulWidget {
   final AlertEvent event;
@@ -262,17 +263,37 @@ class _ScreenshotViewerScreenState extends State<ScreenshotViewerScreen> {
               ),
               const SizedBox(height: 14),
               ElevatedButton.icon(
-                icon: _isCapturing
-                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                    : const Icon(Icons.camera_alt, color: Colors.black, size: 16),
-                label: Text(
-                  _isCapturing ? 'GENERATING CHART...' : 'CAPTURE CHART NOW',
-                  style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 12),
+                icon: const Icon(Icons.show_chart, color: Colors.black, size: 16),
+                label: const Text(
+                  'OPEN LIVE REAL-TIME CHART',
+                  style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 12),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFF59E0B),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => LiveChartScreen(
+                        symbol: _currentEvent.symbol,
+                        initialLevel: _currentEvent.level,
+                        initialTarget: _currentEvent.levelPrice > 0 ? _currentEvent.levelPrice : _currentEvent.currentPrice,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                icon: _isCapturing
+                    ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF59E0B)))
+                    : const Icon(Icons.camera_alt, color: Color(0xFFF59E0B), size: 14),
+                label: Text(
+                  _isCapturing ? 'GENERATING...' : 'Capture Static Snapshot',
+                  style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11),
                 ),
                 onPressed: _isCapturing ? null : _handleCaptureFreshChart,
               ),
