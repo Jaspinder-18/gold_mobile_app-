@@ -1,6 +1,6 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:webview_flutter/webview_flutter.dart';
 import '../models/market_data.dart';
 import '../services/socket_service.dart';
 import '../services/audio_service.dart';
@@ -39,19 +39,34 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
   DateTime? _touchTimestamp;
   String? _touchLevel;
 
-  // Chart state
-  String _selectedTf = '5';
-  double _zoomScale = 1.0;
-  double _panOffset = 0.0;
+  // Chart & WebView state
+  late final WebViewController _webViewController;
+  bool _isLoadingChart = true;
+  String _selectedTf = '15';
+  bool _isFullscreen = false;
+  bool _showPivotChips = true;
+
+  final List<Map<String, String>> _timeframes = [
+    {'label': '1m', 'value': '1'},
+    {'label': '3m', 'value': '3'},
+    {'label': '5m', 'value': '5'},
+    {'label': '15m', 'value': '15'},
+    {'label': '30m', 'value': '30'},
+    {'label': '1h', 'value': '60'},
+    {'label': '4h', 'value': '240'},
+    {'label': '1D', 'value': 'D'},
+  ];
 
   @override
   void initState() {
     super.initState();
-    _currentSymbol = widget.symbol;
+    _currentSymbol = widget.symbol.toUpperCase();
     _touchPrice = widget.touchPrice ?? widget.initialTarget;
     _touchTimestamp = widget.touchTimestamp;
     _touchLevel = widget.initialLevel;
     AudioService().stop();
+
+    _initWebViewController();
     _initSymbolAndListeners();
   }
 
@@ -59,6 +74,179 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
   void dispose() {
     _targetController.dispose();
     super.dispose();
+  }
+
+  String _getTradingViewTicker(String symbol) {
+    final sym = symbol.toUpperCase().trim();
+    final cfg = _socketService.activeSymbolConfig;
+    if (cfg != null && cfg.tradingViewTicker.isNotEmpty) {
+      return cfg.tradingViewTicker;
+    }
+    if (sym == 'XAUUSD' || sym == 'GOLD') return 'OANDA:XAUUSD';
+    if (sym == 'XAGUSD' || sym == 'SILVER') return 'TVC:SILVER';
+    if (sym == 'BTCUSD' || sym == 'BTCUSDT') return 'BINANCE:BTCUSDT';
+    if (sym == 'ETHUSD' || sym == 'ETHUSDT') return 'BINANCE:ETHUSDT';
+    if (sym == 'EURUSD') return 'FX_IDC:EURUSD';
+    if (sym == 'GBPUSD') return 'FX_IDC:GBPUSD';
+    if (sym == 'USDJPY') return 'FX_IDC:USDJPY';
+    if (sym == 'AUDUSD') return 'FX_IDC:AUDUSD';
+    if (sym == 'USDCAD') return 'FX_IDC:USDCAD';
+    if (sym == 'US30' || sym == 'DJI') return 'DJ:DJI';
+    if (sym == 'SPX500' || sym == 'SPX') return 'SP:SPX';
+    if (sym == 'NAS100' || sym == 'NDX') return 'NASDAQ:NDX';
+    if (sym == 'NIFTY') return 'NSE:NIFTY';
+    if (sym == 'BANKNIFTY') return 'NSE:BANKNIFTY';
+    if (sym == 'CRUDEOIL' || sym == 'USOIL') return 'TVC:USOIL';
+    return 'OANDA:$sym';
+  }
+
+  String _buildTradingViewHtml(String symbol, String interval) {
+    final tvTicker = _getTradingViewTicker(symbol);
+    final htmlContent = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>TradingView Chart</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #030712;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #tv_chart_container {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+    }
+    #loading_indicator {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #f59e0b;
+      font-family: monospace;
+      font-size: 13px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 10;
+      background: rgba(3, 7, 18, 0.85);
+      padding: 12px 20px;
+      border-radius: 8px;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2.5px solid rgba(245, 158, 11, 0.2);
+      border-top-color: #f59e0b;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+</head>
+<body>
+  <div id="loading_indicator">
+    <div class="spinner"></div>
+    <span>Connecting TradingView $tvTicker...</span>
+  </div>
+  <div id="tv_chart_container"></div>
+  <script type="text/javascript">
+    function initTradingView() {
+      try {
+        new TradingView.widget({
+          "autosize": true,
+          "symbol": "$tvTicker",
+          "interval": "$interval",
+          "timezone": "Etc/UTC",
+          "theme": "dark",
+          "style": "1",
+          "locale": "en",
+          "toolbar_bg": "#030712",
+          "enable_publishing": false,
+          "allow_symbol_change": false,
+          "container_id": "tv_chart_container",
+          "hide_side_toolbar": false,
+          "save_image": true,
+          "studies": [
+            "Volume@tv-basicstudies"
+          ],
+          "overrides": {
+            "mainSeriesProperties.candleStyle.upColor": "#10b981",
+            "mainSeriesProperties.candleStyle.downColor": "#ef4444",
+            "mainSeriesProperties.candleStyle.borderUpColor": "#10b981",
+            "mainSeriesProperties.candleStyle.borderDownColor": "#ef4444",
+            "mainSeriesProperties.candleStyle.wickUpColor": "#10b981",
+            "mainSeriesProperties.candleStyle.wickDownColor": "#ef4444",
+            "paneProperties.background": "#030712",
+            "paneProperties.vertGridProperties.color": "rgba(255, 255, 255, 0.04)",
+            "paneProperties.horzGridProperties.color": "rgba(255, 255, 255, 0.04)"
+          }
+        });
+        setTimeout(function() {
+          var loader = document.getElementById('loading_indicator');
+          if (loader) loader.style.display = 'none';
+        }, 1500);
+      } catch (err) {
+        console.error("TradingView init error:", err);
+      }
+    }
+
+    if (window.TradingView) {
+      initTradingView();
+    } else {
+      window.onload = initTradingView;
+    }
+  </script>
+</body>
+</html>
+''';
+    return htmlContent;
+  }
+
+  void _initWebViewController() {
+    _webViewController = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF030712))
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onProgress: (int progress) {
+            if (progress >= 80 && _isLoadingChart) {
+              if (mounted) setState(() => _isLoadingChart = false);
+            }
+          },
+          onPageStarted: (String url) {
+            if (mounted) setState(() => _isLoadingChart = true);
+          },
+          onPageFinished: (String url) {
+            if (mounted) setState(() => _isLoadingChart = false);
+          },
+          onWebResourceError: (WebResourceError error) {
+            if (mounted) setState(() => _isLoadingChart = false);
+          },
+        ),
+      );
+    _loadChartHtml();
+  }
+
+  void _loadChartHtml() {
+    final html = _buildTradingViewHtml(_currentSymbol, _selectedTf);
+    _webViewController.loadHtmlString(html, baseUrl: 'https://s3.tradingview.com');
   }
 
   void _initSymbolAndListeners() async {
@@ -107,9 +295,22 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
     };
   }
 
-  Future<void> _handleSetTarget() async {
-    final text = _targetController.text.replaceAll(',', '').trim();
-    final targetVal = double.tryParse(text);
+  void _switchTimeframe(String tfValue) {
+    if (_selectedTf == tfValue) return;
+    setState(() {
+      _selectedTf = tfValue;
+      _isLoadingChart = true;
+    });
+    _socketService.updateRemoteConfig({'chartTimeframe': tfValue});
+    _loadChartHtml();
+  }
+
+  Future<void> _handleSetTarget([double? explicitValue]) async {
+    double? targetVal = explicitValue;
+    if (targetVal == null) {
+      final text = _targetController.text.replaceAll(',', '').trim();
+      targetVal = double.tryParse(text);
+    }
     if (targetVal == null || targetVal <= 0) return;
 
     setState(() => _isSavingAlert = true);
@@ -129,6 +330,12 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
     }
   }
 
+  void _adjustTarget(double delta) {
+    final current = double.tryParse(_targetController.text.replaceAll(',', '').trim()) ?? (_tick?.price ?? 4000.0);
+    final updated = (current + delta).clamp(0.01, 1000000.0);
+    _targetController.text = updated.toStringAsFixed(2);
+  }
+
   Map<String, double> _extractPivots() {
     final ps = _socketService.activePivotState;
     if (ps == null) return {};
@@ -145,667 +352,522 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final currentPrice = _tick?.price ?? widget.initialTarget ?? 3450.0;
+    final currentPrice = _tick?.price ?? widget.initialTarget ?? 4289.14;
     final isTickUp = _tickDirection == 'UP';
     final tickColor = isTickUp ? const Color(0xFF10B981) : const Color(0xFFEF4444);
     final change = _tick?.change ?? 0.0;
     final changePercent = _tick?.changePercent ?? 0.0;
     final isDayPos = change >= 0;
     final dayColor = isDayPos ? const Color(0xFF10B981) : const Color(0xFFEF4444);
+    final pivots = _extractPivots();
 
     return Scaffold(
-      backgroundColor: const Color(0xFF070A12),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0E1626),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Row(
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      _currentSymbol,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 16,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF10B981).withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: const Color(0xFF10B981), width: 0.8),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.circle, color: Color(0xFF10B981), size: 6),
-                          SizedBox(width: 4),
-                          Text(
-                            'LIVE',
-                            style: TextStyle(
-                              color: Color(0xFF10B981),
-                              fontSize: 9,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                Text(
-                  _socketService.activeSymbolConfig?.displayName ?? '$_currentSymbol Spot',
-                  style: const TextStyle(color: Colors.white60, fontSize: 11),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.tune, color: Color(0xFFF59E0B), size: 20),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // 1. Live Price & Stat Bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: const BoxDecoration(
-              color: Color(0xFF0B1120),
-              border: Border(bottom: BorderSide(color: Color(0xFF1E293B))),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      '\$${currentPrice.toStringAsFixed(2)}',
-                      style: TextStyle(
-                        color: tickColor,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 24,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: isTickUp ? const Color(0xFF064E3B) : const Color(0xFF450A0A),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(isTickUp ? Icons.arrow_drop_up : Icons.arrow_drop_down, color: tickColor, size: 14),
-                          Text(
-                            isTickUp ? 'UP' : 'DN',
-                            style: TextStyle(color: tickColor, fontSize: 9, fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isDayPos ? const Color(0xFF064E3B).withValues(alpha: 0.6) : const Color(0xFF450A0A).withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: dayColor.withValues(alpha: 0.6)),
-                  ),
-                  child: Text(
-                    '${isDayPos ? '+' : ''}${change.toStringAsFixed(2)} (${changePercent.toStringAsFixed(2)}%)',
-                    style: TextStyle(color: dayColor, fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // 2. Timeframe Selection Bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            color: const Color(0xFF070A12),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1D'].map((tf) {
-                  final rawVal = tf.replaceAll('m', '').replaceAll('h', '60').replaceAll('D', '1D');
-                  final isSel = _selectedTf == rawVal || (tf == '1h' && _selectedTf == '60') || (tf == '5m' && _selectedTf == '5');
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: InkWell(
-                      onTap: () {
-                        setState(() => _selectedTf = rawVal);
-                        _socketService.updateRemoteConfig({'chartTimeframe': rawVal});
-                      },
-                      borderRadius: BorderRadius.circular(6),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF131D31),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B)),
-                        ),
-                        child: Text(
-                          tf,
-                          style: TextStyle(
-                            color: isSel ? Colors.black : Colors.white70,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                }).toList(),
+      backgroundColor: const Color(0xFF030712),
+      appBar: _isFullscreen
+          ? null
+          : AppBar(
+              backgroundColor: const Color(0xFF090E1A),
+              elevation: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+                onPressed: () => Navigator.pop(context),
               ),
-            ),
-          ),
-
-          // 3. High-Performance Real-Time Interactive Canvas Chart
-          Expanded(
-            child: GestureDetector(
-              onScaleUpdate: (details) {
-                setState(() {
-                  _zoomScale = (_zoomScale * details.scale).clamp(0.5, 3.0);
-                  _panOffset += details.focalPointDelta.dx;
-                });
-              },
-              child: Container(
-                color: const Color(0xFF050811),
-                width: double.infinity,
-                child: CustomPaint(
-                  painter: _RealtimeLiveChartPainter(
-                    currentPrice: currentPrice,
-                    pivots: _extractPivots(),
-                    targetPrice: _config.customPriceAlertTarget > 0 ? _config.customPriceAlertTarget : (widget.initialTarget ?? 0.0),
-                    touchPrice: _touchPrice,
-                    activeAlerts: _socketService.activeAlerts,
-                    isTickUp: isTickUp,
-                    zoomScale: _zoomScale,
-                    panOffset: _panOffset,
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-          // 3.1 Prominent Touch Event Information Card (White Line Marker & Timestamp)
-          if (_touchPrice != null && _touchPrice! > 0)
-            Container(
-              margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0F172A),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 1.2),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.white.withValues(alpha: 0.08),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
-              child: Row(
+              title: Row(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.touch_app_rounded, color: Colors.white, size: 16),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Row(
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: const BoxDecoration(
-                                    color: Colors.white,
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  'WHITE LINE TOUCH: \$${_touchPrice!.toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 12,
-                                    fontFamily: 'monospace',
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (_touchLevel != null && _touchLevel!.isNotEmpty)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF59E0B),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  _touchLevel!,
-                                  style: const TextStyle(color: Colors.black, fontSize: 9.5, fontWeight: FontWeight.w900),
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Row(
-                              children: [
-                                const Icon(Icons.access_time_filled, color: Colors.white70, size: 12),
-                                const SizedBox(width: 4),
-                                Text(
-                                  DateFormat('dd MMM yyyy · HH:mm:ss').format(_touchTimestamp ?? DateTime.now()),
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 11,
-                                    fontFamily: 'monospace',
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Text(
-                              'Live: \$${currentPrice.toStringAsFixed(2)} (${(currentPrice - _touchPrice!) >= 0 ? '+' : ''}${(currentPrice - _touchPrice!).toStringAsFixed(2)})',
-                              style: TextStyle(
-                                color: (currentPrice - _touchPrice!) >= 0 ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                                fontSize: 10,
-                                fontFamily: 'monospace',
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          // 4. Quick Target Adjustment & Active Alerts Drawer
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: const BoxDecoration(
-              color: Color(0xFF0E1626),
-              border: Border(top: BorderSide(color: Color(0xFF1E293B))),
-            ),
-            child: SafeArea(
-              top: false,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _targetController,
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontFamily: 'monospace',
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                      Row(
+                        children: [
+                          Text(
+                            _currentSymbol,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 16,
+                              fontFamily: 'monospace',
+                            ),
                           ),
-                          decoration: InputDecoration(
-                            labelText: 'SET TARGET PRICE',
-                            labelStyle: const TextStyle(color: Color(0xFFF59E0B), fontSize: 10, fontWeight: FontWeight.bold),
-                            prefixText: '\$ ',
-                            prefixStyle: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold),
-                            filled: true,
-                            fillColor: const Color(0xFF070A12),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
-                            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFF59E0B))),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: const Color(0xFF10B981), width: 0.8),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.circle, color: Color(0xFF10B981), size: 6),
+                                SizedBox(width: 4),
+                                Text(
+                                  'LIVE TV',
+                                  style: TextStyle(
+                                    color: Color(0xFF10B981),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
+                        ],
                       ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        height: 44,
-                        child: ElevatedButton.icon(
-                          onPressed: _isSavingAlert ? null : _handleSetTarget,
-                          icon: _isSavingAlert
-                              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                              : const Icon(Icons.add_alert, color: Colors.black, size: 16),
-                          label: Text(
-                            _isSavingAlert ? 'SAVING...' : 'ARM TARGET',
-                            style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFF59E0B),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                        ),
+                      Text(
+                        _socketService.activeSymbolConfig?.displayName ?? '$_currentSymbol Spot',
+                        style: const TextStyle(color: Colors.white60, fontSize: 11),
                       ),
                     ],
                   ),
                 ],
               ),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.refresh, color: Colors.white70, size: 20),
+                  tooltip: 'Reload Chart',
+                  onPressed: () {
+                    setState(() => _isLoadingChart = true);
+                    _loadChartHtml();
+                  },
+                ),
+                IconButton(
+                  icon: Icon(_isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen, color: const Color(0xFFF59E0B), size: 22),
+                  tooltip: 'Toggle Fullscreen',
+                  onPressed: () => setState(() => _isFullscreen = !_isFullscreen),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.tune, color: Color(0xFFF59E0B), size: 20),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  ),
+                ),
+              ],
             ),
-          ),
-        ],
+      body: SafeArea(
+        top: !_isFullscreen,
+        child: Column(
+          children: [
+            // 1. Live Price & Stat Bar
+            if (!_isFullscreen)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF090E1A),
+                  border: Border(bottom: BorderSide(color: Color(0xFF1E293B))),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '\$${NumberFormat('#,##0.00').format(currentPrice)}',
+                          style: TextStyle(
+                            color: tickColor,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 24,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: isTickUp ? const Color(0xFF064E3B) : const Color(0xFF450A0A),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(isTickUp ? Icons.arrow_drop_up : Icons.arrow_drop_down, color: tickColor, size: 14),
+                              Text(
+                                isTickUp ? 'UP' : 'DN',
+                                style: TextStyle(color: tickColor, fontSize: 9, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isDayPos ? const Color(0xFF064E3B).withValues(alpha: 0.6) : const Color(0xFF450A0A).withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: dayColor.withValues(alpha: 0.6)),
+                      ),
+                      child: Text(
+                        '${isDayPos ? '+' : ''}${change.toStringAsFixed(2)} (${changePercent.toStringAsFixed(2)}%)',
+                        style: TextStyle(color: dayColor, fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // 2. Timeframe Selection Bar
+            if (!_isFullscreen)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                color: const Color(0xFF030712),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: _timeframes.map((tf) {
+                            final isSel = _selectedTf == tf['value'];
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 6),
+                              child: InkWell(
+                                onTap: () => _switchTimeframe(tf['value']!),
+                                borderRadius: BorderRadius.circular(6),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF131D31),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B)),
+                                  ),
+                                  child: Text(
+                                    tf['label']!,
+                                    style: TextStyle(
+                                      color: isSel ? Colors.black : Colors.white70,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ),
+                    if (pivots.isNotEmpty)
+                      InkWell(
+                        onTap: () => setState(() => _showPivotChips = !_showPivotChips),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: _showPivotChips ? const Color(0xFF1E293B) : const Color(0xFF0F172A),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: const Color(0xFF334155)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.layers_outlined, color: Color(0xFFF59E0B), size: 13),
+                              const SizedBox(width: 4),
+                              Text(
+                                _showPivotChips ? 'PIVOTS' : 'HIDE',
+                                style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
+            // 2.1 Pivot Level Reference Strip (Fibonacci / Traditional Levels)
+            if (!_isFullscreen && _showPivotChips && pivots.isNotEmpty)
+              Container(
+                height: 32,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                color: const Color(0xFF050811),
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: pivots.entries.map((e) {
+                    Color chipCol = const Color(0xFF3B82F6);
+                    if (e.key.startsWith('R')) chipCol = const Color(0xFFEF4444);
+                    if (e.key.startsWith('S')) chipCol = const Color(0xFF10B981);
+                    return Container(
+                      margin: const EdgeInsets.only(right: 6, top: 4, bottom: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: chipCol.withValues(alpha: 0.6), width: 0.8),
+                      ),
+                      child: Row(
+                        children: [
+                          Text(
+                            e.key,
+                            style: TextStyle(color: chipCol, fontSize: 9.5, fontWeight: FontWeight.w900),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '\$${e.value.toStringAsFixed(2)}',
+                            style: const TextStyle(color: Colors.white, fontSize: 9.5, fontFamily: 'monospace', fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+
+            // 3. Authentic TradingView Advanced Real-Time Chart Widget
+            Expanded(
+              child: Stack(
+                children: [
+                  WebViewWidget(controller: _webViewController),
+                  if (_isLoadingChart)
+                    Container(
+                      color: const Color(0xFF030712),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(color: Color(0xFFF59E0B), strokeWidth: 3),
+                            const SizedBox(height: 14),
+                            Text(
+                              'Loading TradingView Live Chart (${_getTradingViewTicker(_currentSymbol)})...',
+                              style: const TextStyle(
+                                color: Color(0xFFF59E0B),
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (_isFullscreen)
+                    Positioned(
+                      top: 16,
+                      right: 16,
+                      child: FloatingActionButton.small(
+                        backgroundColor: const Color(0xFFF59E0B),
+                        foregroundColor: Colors.black,
+                        onPressed: () => setState(() => _isFullscreen = false),
+                        child: const Icon(Icons.fullscreen_exit, size: 20),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+            // 4. White Line Touch Notification Info Banner (if navigated from alert)
+            if (!_isFullscreen && _touchPrice != null && _touchPrice! > 0)
+              Container(
+                margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 1.2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.touch_app_rounded, color: Colors.white, size: 16),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Row(
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    'WHITE LINE TOUCH: \$${_touchPrice!.toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 12,
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (_touchLevel != null && _touchLevel!.isNotEmpty)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF59E0B),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    _touchLevel!,
+                                    style: const TextStyle(color: Colors.black, fontSize: 9.5, fontWeight: FontWeight.w900),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.access_time_filled, color: Colors.white70, size: 12),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    DateFormat('dd MMM yyyy · HH:mm:ss').format(_touchTimestamp ?? DateTime.now()),
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 11,
+                                      fontFamily: 'monospace',
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Text(
+                                'Live: \$${currentPrice.toStringAsFixed(2)} (${(currentPrice - _touchPrice!) >= 0 ? '+' : ''}${(currentPrice - _touchPrice!).toStringAsFixed(2)})',
+                                style: TextStyle(
+                                  color: (currentPrice - _touchPrice!) >= 0 ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                                  fontSize: 10,
+                                  fontFamily: 'monospace',
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // 5. Quick Target Price Arming Controls
+            if (!_isFullscreen)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF0E1626),
+                  border: Border(top: BorderSide(color: Color(0xFF1E293B))),
+                ),
+                child: SafeArea(
+                  top: false,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Quick Adjustment Steppers
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'QUICK STEPPERS:',
+                              style: TextStyle(color: Colors.white38, fontSize: 9.5, fontWeight: FontWeight.bold),
+                            ),
+                            Row(
+                              children: [-10.0, -1.0, 1.0, 10.0].map((step) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(left: 4),
+                                  child: InkWell(
+                                    onTap: () => _adjustTarget(step),
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF131D31),
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: const Color(0xFF1E293B)),
+                                      ),
+                                      child: Text(
+                                        '${step > 0 ? '+' : ''}${step.toStringAsFixed(0)}',
+                                        style: TextStyle(
+                                          color: step > 0 ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          fontFamily: 'monospace',
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _targetController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontFamily: 'monospace',
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              decoration: InputDecoration(
+                                labelText: 'SET TARGET PRICE',
+                                labelStyle: const TextStyle(color: Color(0xFFF59E0B), fontSize: 10, fontWeight: FontWeight.bold),
+                                prefixText: '\$ ',
+                                prefixStyle: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold),
+                                filled: true,
+                                fillColor: const Color(0xFF070A12),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
+                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFF59E0B))),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            height: 44,
+                            child: ElevatedButton.icon(
+                              onPressed: _isSavingAlert ? null : () => _handleSetTarget(),
+                              icon: _isSavingAlert
+                                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                                  : const Icon(Icons.add_alert, color: Colors.black, size: 16),
+                              label: Text(
+                                _isSavingAlert ? 'SAVING...' : 'ARM TARGET',
+                                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFF59E0B),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
-  }
-}
-
-/// Custom Canvas Painter for Real-Time Financial Candlesticks & Pivot Grid
-class _RealtimeLiveChartPainter extends CustomPainter {
-  final double currentPrice;
-  final Map<String, double> pivots;
-  final double targetPrice;
-  final double? touchPrice;
-  final List<PriceAlertModel> activeAlerts;
-  final bool isTickUp;
-  final double zoomScale;
-  final double panOffset;
-
-  _RealtimeLiveChartPainter({
-    required this.currentPrice,
-    required this.pivots,
-    required this.targetPrice,
-    this.touchPrice,
-    required this.activeAlerts,
-    required this.isTickUp,
-    required this.zoomScale,
-    required this.panOffset,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (size.width <= 0 || size.height <= 0) return;
-
-    // 1. Calculate price range bounds
-    final prices = <double>[currentPrice];
-    if (targetPrice > 0) prices.add(targetPrice);
-    if (touchPrice != null && touchPrice! > 0) prices.add(touchPrice!);
-    for (final a in activeAlerts) {
-      if (a.targetPrice > 0) prices.add(a.targetPrice);
-    }
-    pivots.forEach((_, v) {
-      if (v > 0) prices.add(v);
-    });
-
-    double minP = prices.reduce(min);
-    double maxP = prices.reduce(max);
-    if (minP == maxP) {
-      minP -= 5.0;
-      maxP += 5.0;
-    }
-    final padding = (maxP - minP) * 0.15;
-    minP -= padding;
-    maxP += padding;
-    final priceRange = (maxP - minP).clamp(0.01, 1000000.0);
-
-    double getY(double price) {
-      final norm = (price - minP) / priceRange;
-      return size.height - (norm * size.height);
-    }
-
-    // 2. Draw Subtle Background Grid
-    final gridPaint = Paint()
-      ..color = const Color(0xFF131D31).withValues(alpha: 0.6)
-      ..strokeWidth = 0.8;
-
-    const int gridSteps = 8;
-    for (int i = 0; i <= gridSteps; i++) {
-      final y = size.height * (i / gridSteps);
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-      final priceAtY = minP + (priceRange * ((size.height - y) / size.height));
-
-      final tp = TextPainter(
-        text: TextSpan(
-          text: '\$${priceAtY.toStringAsFixed(2)}',
-          style: const TextStyle(color: Color(0xFF475569), fontSize: 9, fontFamily: 'monospace'),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(size.width - tp.width - 6, y - 10));
-    }
-
-    // 3. Draw Pivot Levels (R3, R2, R1, P, S1, S2, S3)
-    pivots.forEach((key, val) {
-      if (val <= 0) return;
-      final y = getY(val);
-      if (y < 0 || y > size.height) return;
-
-      Color levelCol = const Color(0xFF3B82F6);
-      if (key.startsWith('R')) levelCol = const Color(0xFFEF4444);
-      if (key.startsWith('S')) levelCol = const Color(0xFF10B981);
-
-      final linePaint = Paint()
-        ..color = levelCol.withValues(alpha: 0.45)
-        ..strokeWidth = 1.0;
-
-      // Draw dashed horizontal line
-      double startX = 0;
-      const dashW = 5.0;
-      const spaceW = 4.0;
-      while (startX < size.width - 70) {
-        canvas.drawLine(Offset(startX, y), Offset(startX + dashW, y), linePaint);
-        startX += dashW + spaceW;
-      }
-
-      // Draw level badge
-      final badgeText = '$key \$${val.toStringAsFixed(2)}';
-      final tp = TextPainter(
-        text: TextSpan(
-          text: badgeText,
-          style: TextStyle(color: levelCol, fontSize: 9, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-
-      final badgeRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(size.width - tp.width - 12, y - 8, tp.width + 8, 16),
-        const Radius.circular(3),
-      );
-      canvas.drawRRect(badgeRect, Paint()..color = const Color(0xFF0B1120));
-      canvas.drawRRect(badgeRect, Paint()..color = levelCol.withValues(alpha: 0.8)..style = PaintingStyle.stroke..strokeWidth = 0.8);
-      tp.paint(canvas, Offset(size.width - tp.width - 8, y - 6));
-    });
-
-    // 4. Draw Real-Time Candlesticks leading to live price
-    const candleCount = 28;
-    final candleWidth = ((size.width - 80) / candleCount).clamp(6.0, 24.0);
-    final random = Random(42);
-
-    double walkPrice = currentPrice - (candleCount * 0.15);
-    for (int i = 0; i < candleCount; i++) {
-      final isLast = i == candleCount - 1;
-      final x = (i * candleWidth) + 12 + panOffset;
-      if (x < -candleWidth || x > size.width - 60) continue;
-
-      double cOpen = walkPrice;
-      double cClose = isLast ? currentPrice : (walkPrice + (random.nextDouble() - 0.48) * 2.2);
-      double cHigh = max(cOpen, cClose) + random.nextDouble() * 1.5;
-      double cLow = min(cOpen, cClose) - random.nextDouble() * 1.5;
-      walkPrice = cClose;
-
-      final isGreen = cClose >= cOpen;
-      final candleColor = isGreen ? const Color(0xFF10B981) : const Color(0xFFEF4444);
-
-      final topY = getY(cHigh);
-      final botY = getY(cLow);
-      final openY = getY(cOpen);
-      final closeY = getY(cClose);
-
-      // Wick
-      canvas.drawLine(
-        Offset(x + candleWidth / 2, topY),
-        Offset(x + candleWidth / 2, botY),
-        Paint()..color = candleColor..strokeWidth = 1.2,
-      );
-
-      // Body
-      final bodyRect = Rect.fromLTRB(
-        x + 1,
-        min(openY, closeY),
-        x + candleWidth - 1,
-        max(openY, closeY) + (openY == closeY ? 1.0 : 0.0),
-      );
-      canvas.drawRect(bodyRect, Paint()..color = candleColor);
-    }
-
-    // 5. Draw Active Target Lines (Gold / Amber)
-    final targetPrices = <double>[];
-    if (targetPrice > 0) targetPrices.add(targetPrice);
-    for (final a in activeAlerts) {
-      if (a.targetPrice > 0 && !targetPrices.contains(a.targetPrice)) {
-        targetPrices.add(a.targetPrice);
-      }
-    }
-
-    for (final tpVal in targetPrices) {
-      final y = getY(tpVal);
-      if (y < 0 || y > size.height) continue;
-
-      final targetPaint = Paint()
-        ..color = const Color(0xFFF59E0B)
-        ..strokeWidth = 1.5;
-
-      // Solid highlighted target line
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), targetPaint);
-
-      final tpText = '🎯 TARGET \$${tpVal.toStringAsFixed(2)}';
-      final tp = TextPainter(
-        text: TextSpan(
-          text: tpText,
-          style: const TextStyle(color: Colors.black, fontSize: 9.5, fontWeight: FontWeight.w900, fontFamily: 'monospace'),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-
-      final badgeRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(12, y - 9, tp.width + 10, 18),
-        const Radius.circular(4),
-      );
-      canvas.drawRRect(badgeRect, Paint()..color = const Color(0xFFF59E0B));
-      tp.paint(canvas, Offset(17, y - 7));
-    }
-
-    // 5.1 Draw White Price Touch Line & Timestamp Marker
-    if (touchPrice != null && touchPrice! > 0) {
-      final touchY = getY(touchPrice!);
-      if (touchY >= 0 && touchY <= size.height) {
-        // Glowing white line effect
-        canvas.drawLine(
-          Offset(0, touchY),
-          Offset(size.width, touchY),
-          Paint()
-            ..color = Colors.white.withValues(alpha: 0.35)
-            ..strokeWidth = 6.0,
-        );
-        // Solid crisp white horizontal line
-        canvas.drawLine(
-          Offset(0, touchY),
-          Offset(size.width, touchY),
-          Paint()
-            ..color = Colors.white
-            ..strokeWidth = 2.2,
-        );
-
-        final touchText = '⚪ TOUCHED @ \$${touchPrice!.toStringAsFixed(2)}';
-        final tp = TextPainter(
-          text: TextSpan(
-            text: touchText,
-            style: const TextStyle(
-              color: Colors.black,
-              fontSize: 9.5,
-              fontWeight: FontWeight.w900,
-              fontFamily: 'monospace',
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-
-        final badgeRect = RRect.fromRectAndRadius(
-          Rect.fromLTWH(size.width - tp.width - 20, touchY - 9, tp.width + 12, 18),
-          const Radius.circular(4),
-        );
-        canvas.drawRRect(badgeRect, Paint()..color = Colors.white);
-        tp.paint(canvas, Offset(size.width - tp.width - 14, touchY - 7));
-      }
-    }
-
-    // 6. Draw Glowing Live Current Price Line
-    final liveY = getY(currentPrice);
-    final liveColor = isTickUp ? const Color(0xFF10B981) : const Color(0xFFEF4444);
-
-    final liveLinePaint = Paint()
-      ..color = liveColor
-      ..strokeWidth = 1.5;
-
-    // Glowing glow effect
-    canvas.drawLine(
-      Offset(0, liveY),
-      Offset(size.width, liveY),
-      Paint()..color = liveColor.withValues(alpha: 0.25)..strokeWidth = 6.0,
-    );
-    canvas.drawLine(Offset(0, liveY), Offset(size.width, liveY), liveLinePaint);
-
-    // Live Price Pill on right axis
-    final liveText = '\$${currentPrice.toStringAsFixed(2)}';
-    final liveTp = TextPainter(
-      text: TextSpan(
-        text: liveText,
-        style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.w900, fontFamily: 'monospace'),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-
-    final liveRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(size.width - liveTp.width - 16, liveY - 10, liveTp.width + 12, 20),
-      const Radius.circular(4),
-    );
-    canvas.drawRRect(liveRect, Paint()..color = liveColor);
-    liveTp.paint(canvas, Offset(size.width - liveTp.width - 10, liveY - 7));
-  }
-
-  @override
-  bool shouldRepaint(covariant _RealtimeLiveChartPainter oldDelegate) {
-    return oldDelegate.currentPrice != currentPrice ||
-        oldDelegate.targetPrice != targetPrice ||
-        oldDelegate.touchPrice != touchPrice ||
-        oldDelegate.isTickUp != isTickUp ||
-        oldDelegate.zoomScale != zoomScale ||
-        oldDelegate.panOffset != panOffset ||
-        oldDelegate.activeAlerts.length != activeAlerts.length;
   }
 }

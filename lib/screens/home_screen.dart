@@ -1037,6 +1037,37 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           const SizedBox(height: 12),
           // Chart Settings Toolbar (Timeframe, Range, Spacing)
           _buildChartToolbar(),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.candlestick_chart_rounded, color: Colors.black, size: 18),
+              label: const Text(
+                'OPEN LIVE TRADINGVIEW CHART',
+                style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 12, letterSpacing: 0.5),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFF59E0B),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                elevation: 4,
+              ),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => LiveChartScreen(
+                      symbol: _socketService.activeSymbol,
+                      initialLevel: 'LIVE',
+                      initialTarget: _socketService.currentConfig.customPriceAlertTarget,
+                      touchPrice: _socketService.currentTick?.price ?? 0.0,
+                      touchTimestamp: DateTime.now(),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
