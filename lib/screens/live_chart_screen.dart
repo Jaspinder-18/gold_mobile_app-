@@ -46,6 +46,11 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
   bool _isFullscreen = false;
   bool _showPivotChips = true;
 
+  // Callback references for clean subscription lifecycle
+  late final Function(MarketTick) _tickListener;
+  late final Function(PivotConfig) _configListener;
+  late final Function(List<PriceAlertModel>) _activeAlertsListener;
+
   final List<Map<String, String>> _timeframes = [
     {'label': '1m', 'value': '1'},
     {'label': '3m', 'value': '3'},
@@ -67,11 +72,14 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
     AudioService().stop();
 
     _initWebViewController();
-    _initSymbolAndListeners();
+    _setupListeners();
   }
 
   @override
   void dispose() {
+    _socketService.removeMarketTickListener(_tickListener);
+    _socketService.removeConfigListener(_configListener);
+    _socketService.removeActiveAlertsListener(_activeAlertsListener);
     _targetController.dispose();
     super.dispose();
   }
@@ -249,7 +257,7 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
     _webViewController.loadHtmlString(html, baseUrl: 'https://s3.tradingview.com');
   }
 
-  void _initSymbolAndListeners() async {
+  void _setupListeners() async {
     if (_socketService.activeSymbol != _currentSymbol) {
       await _socketService.switchSymbol(_currentSymbol);
     }
@@ -268,7 +276,7 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
       _tickDirection = _tick!.change >= 0 ? 'UP' : 'DOWN';
     }
 
-    _socketService.onMarketTick = (tick) {
+    _tickListener = (tick) {
       if (mounted) {
         setState(() {
           if (_previousPrice > 0) {
@@ -281,18 +289,17 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
         });
       }
     };
+    _socketService.addMarketTickListener(_tickListener);
 
-    _socketService.onConfigUpdate = (config) {
-      if (mounted) {
-        setState(() => _config = config);
-      }
+    _configListener = (config) {
+      if (mounted) setState(() => _config = config);
     };
+    _socketService.addConfigListener(_configListener);
 
-    _socketService.onActiveAlertsUpdate = (alerts) {
-      if (mounted) {
-        setState(() {});
-      }
+    _activeAlertsListener = (alerts) {
+      if (mounted) setState(() {});
     };
+    _socketService.addActiveAlertsListener(_activeAlertsListener);
   }
 
   void _switchTimeframe(String tfValue) {
@@ -363,6 +370,7 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF030712),
+      // In fullscreen, we do NOT use standard AppBar; instead we render a sleek in-body control bar inside SafeArea
       appBar: _isFullscreen
           ? null
           : AppBar(
@@ -432,9 +440,9 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
                   },
                 ),
                 IconButton(
-                  icon: Icon(_isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen, color: const Color(0xFFF59E0B), size: 22),
-                  tooltip: 'Toggle Fullscreen',
-                  onPressed: () => setState(() => _isFullscreen = !_isFullscreen),
+                  icon: const Icon(Icons.fullscreen, color: Color(0xFFF59E0B), size: 24),
+                  tooltip: 'Fullscreen Chart',
+                  onPressed: () => setState(() => _isFullscreen = true),
                 ),
                 IconButton(
                   icon: const Icon(Icons.tune, color: Color(0xFFF59E0B), size: 20),
@@ -445,12 +453,113 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
                 ),
               ],
             ),
+      // SafeArea is ALWAYS strictly applied on all sides (protecting against camera notch, punch hole, and status bar)
       body: SafeArea(
-        top: !_isFullscreen,
+        top: true,
+        bottom: true,
+        left: true,
+        right: true,
         child: Column(
           children: [
-            // 1. Live Price & Stat Bar
-            if (!_isFullscreen)
+            // ================= FULLSCREEN TOP CONTROL BAR =================
+            if (_isFullscreen)
+              Container(
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF090E1A),
+                  border: Border(bottom: BorderSide(color: Color(0xFF1E293B))),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Back & Symbol Chip
+                    Row(
+                      children: [
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 18),
+                          onPressed: () => setState(() => _isFullscreen = false),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _currentSymbol,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 14,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '\$${NumberFormat('#,##0.00').format(currentPrice)}',
+                          style: TextStyle(
+                            color: tickColor,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    // Quick Timeframes & Exit Fullscreen Button
+                    Row(
+                      children: [
+                        ...['1m', '5m', '15m', '1h', '1D'].map((tf) {
+                          final rawVal = tf.replaceAll('m', '').replaceAll('h', '60');
+                          final isSel = _selectedTf == rawVal;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: InkWell(
+                              onTap: () => _switchTimeframe(rawVal),
+                              borderRadius: BorderRadius.circular(4),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF131D31),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B)),
+                                ),
+                                child: Text(
+                                  tf,
+                                  style: TextStyle(
+                                    color: isSel ? Colors.black : Colors.white70,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                        const SizedBox(width: 4),
+                        // Dedicated Exit Fullscreen Button
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.fullscreen_exit, color: Colors.black, size: 14),
+                          label: const Text(
+                            'EXIT',
+                            style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 10),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFF59E0B),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            minimumSize: Size.zero,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                          onPressed: () => setState(() => _isFullscreen = false),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+            // ================= NORMAL VIEW HEADER SECTIONS =================
+            if (!_isFullscreen) ...[
+              // 1. Live Price & Stat Bar
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 decoration: const BoxDecoration(
@@ -506,8 +615,7 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
                 ),
               ),
 
-            // 2. Timeframe Selection Bar
-            if (!_isFullscreen)
+              // 2. Timeframe Selection Bar
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 color: const Color(0xFF030712),
@@ -573,45 +681,46 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
                 ),
               ),
 
-            // 2.1 Pivot Level Reference Strip (Fibonacci / Traditional Levels)
-            if (!_isFullscreen && _showPivotChips && pivots.isNotEmpty)
-              Container(
-                height: 32,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                color: const Color(0xFF050811),
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  children: pivots.entries.map((e) {
-                    Color chipCol = const Color(0xFF3B82F6);
-                    if (e.key.startsWith('R')) chipCol = const Color(0xFFEF4444);
-                    if (e.key.startsWith('S')) chipCol = const Color(0xFF10B981);
-                    return Container(
-                      margin: const EdgeInsets.only(right: 6, top: 4, bottom: 4),
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: chipCol.withValues(alpha: 0.6), width: 0.8),
-                      ),
-                      child: Row(
-                        children: [
-                          Text(
-                            e.key,
-                            style: TextStyle(color: chipCol, fontSize: 9.5, fontWeight: FontWeight.w900),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '\$${e.value.toStringAsFixed(2)}',
-                            style: const TextStyle(color: Colors.white, fontSize: 9.5, fontFamily: 'monospace', fontWeight: FontWeight.w600),
-                          ),
-                        ],
-                      ),
-                    );
-                  }).toList(),
+              // 2.1 Pivot Level Reference Strip (Fibonacci / Traditional Levels)
+              if (_showPivotChips && pivots.isNotEmpty)
+                Container(
+                  height: 32,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  color: const Color(0xFF050811),
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: pivots.entries.map((e) {
+                      Color chipCol = const Color(0xFF3B82F6);
+                      if (e.key.startsWith('R')) chipCol = const Color(0xFFEF4444);
+                      if (e.key.startsWith('S')) chipCol = const Color(0xFF10B981);
+                      return Container(
+                        margin: const EdgeInsets.only(right: 6, top: 4, bottom: 4),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0F172A),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: chipCol.withValues(alpha: 0.6), width: 0.8),
+                        ),
+                        child: Row(
+                          children: [
+                            Text(
+                              e.key,
+                              style: TextStyle(color: chipCol, fontSize: 9.5, fontWeight: FontWeight.w900),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              '\$${e.value.toStringAsFixed(2)}',
+                              style: const TextStyle(color: Colors.white, fontSize: 9.5, fontFamily: 'monospace', fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
                 ),
-              ),
+            ],
 
-            // 3. Authentic TradingView Advanced Real-Time Chart Widget
+            // ================= TRADINGVIEW ADVANCED CHART WEBVIEW =================
             Expanded(
               child: Stack(
                 children: [
@@ -638,132 +747,122 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
                         ),
                       ),
                     ),
-                  if (_isFullscreen)
-                    Positioned(
-                      top: 16,
-                      right: 16,
-                      child: FloatingActionButton.small(
-                        backgroundColor: const Color(0xFFF59E0B),
-                        foregroundColor: Colors.black,
-                        onPressed: () => setState(() => _isFullscreen = false),
-                        child: const Icon(Icons.fullscreen_exit, size: 20),
-                      ),
-                    ),
                 ],
               ),
             ),
 
-            // 4. White Line Touch Notification Info Banner (if navigated from alert)
-            if (!_isFullscreen && _touchPrice != null && _touchPrice! > 0)
-              Container(
-                margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 1.2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.white.withValues(alpha: 0.08),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.15),
-                        shape: BoxShape.circle,
+            // ================= NORMAL VIEW FOOTER SECTIONS =================
+            if (!_isFullscreen) ...[
+              // 4. White Line Touch Notification Info Banner (if navigated from alert)
+              if (_touchPrice != null && _touchPrice! > 0)
+                Container(
+                  margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 1.2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        blurRadius: 8,
+                        spreadRadius: 1,
                       ),
-                      child: const Icon(Icons.touch_app_rounded, color: Colors.white, size: 16),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Row(
-                                children: [
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.touch_app_rounded, color: Colors.white, size: 16),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: const BoxDecoration(
+                                        color: Colors.white,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      'WHITE LINE TOUCH: \$${_touchPrice!.toStringAsFixed(2)}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 12,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (_touchLevel != null && _touchLevel!.isNotEmpty)
                                   Container(
-                                    width: 8,
-                                    height: 8,
-                                    decoration: const BoxDecoration(
-                                      color: Colors.white,
-                                      shape: BoxShape.circle,
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF59E0B),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      _touchLevel!,
+                                      style: const TextStyle(color: Colors.black, fontSize: 9.5, fontWeight: FontWeight.w900),
                                     ),
                                   ),
-                                  const SizedBox(width: 5),
-                                  Text(
-                                    'WHITE LINE TOUCH: \$${_touchPrice!.toStringAsFixed(2)}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 12,
-                                      fontFamily: 'monospace',
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Icon(Icons.access_time_filled, color: Colors.white70, size: 12),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      DateFormat('dd MMM yyyy · HH:mm:ss').format(_touchTimestamp ?? DateTime.now()),
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 11,
+                                        fontFamily: 'monospace',
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                              if (_touchLevel != null && _touchLevel!.isNotEmpty)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFF59E0B),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    _touchLevel!,
-                                    style: const TextStyle(color: Colors.black, fontSize: 9.5, fontWeight: FontWeight.w900),
+                                  ],
+                                ),
+                                Text(
+                                  'Live: \$${currentPrice.toStringAsFixed(2)} (${(currentPrice - _touchPrice!) >= 0 ? '+' : ''}${(currentPrice - _touchPrice!).toStringAsFixed(2)})',
+                                  style: TextStyle(
+                                    color: (currentPrice - _touchPrice!) >= 0 ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                                    fontSize: 10,
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                            ],
-                          ),
-                          const SizedBox(height: 3),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Row(
-                                children: [
-                                  const Icon(Icons.access_time_filled, color: Colors.white70, size: 12),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    DateFormat('dd MMM yyyy · HH:mm:ss').format(_touchTimestamp ?? DateTime.now()),
-                                    style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 11,
-                                      fontFamily: 'monospace',
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Text(
-                                'Live: \$${currentPrice.toStringAsFixed(2)} (${(currentPrice - _touchPrice!) >= 0 ? '+' : ''}${(currentPrice - _touchPrice!).toStringAsFixed(2)})',
-                                style: TextStyle(
-                                  color: (currentPrice - _touchPrice!) >= 0 ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                                  fontSize: 10,
-                                  fontFamily: 'monospace',
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
 
-            // 5. Quick Target Price Arming Controls
-            if (!_isFullscreen)
+              // 5. Quick Target Price Arming Controls
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: const BoxDecoration(
@@ -865,6 +964,7 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
                   ),
                 ),
               ),
+            ],
           ],
         ),
       ),
