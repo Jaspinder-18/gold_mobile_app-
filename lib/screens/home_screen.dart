@@ -133,7 +133,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       debugPrint('[HomeScreen] Notification tapped with payload: $payload');
 
       AlertEvent? targetAlert;
-      if (_alerts.isNotEmpty) {
+      if (_alerts.isNotEmpty && payload != null && !payload.startsWith('{')) {
         targetAlert = _alerts.firstWhere(
           (a) => a.screenshotPath == payload || a.id == payload,
           orElse: () => _alerts.first,
@@ -141,13 +141,21 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       } else {
         String sym = _socketService.activeSymbol;
         double price = _socketService.currentTick?.price ?? 0;
+        double target = price;
         String lvl = 'CUSTOM';
+        DateTime ts = DateTime.now();
+        String sPath = '';
         if (payload != null && payload.startsWith('{')) {
           try {
             final map = json.decode(payload);
             sym = map['symbol']?.toString() ?? sym;
-            price = double.tryParse(map['currentPrice']?.toString() ?? map['targetPrice']?.toString() ?? '') ?? price;
+            price = double.tryParse(map['currentPrice']?.toString() ?? '') ?? price;
+            target = double.tryParse(map['targetPrice']?.toString() ?? '') ?? price;
             lvl = map['level']?.toString() ?? lvl;
+            if (map['timestamp'] != null) {
+              ts = DateTime.tryParse(map['timestamp'].toString()) ?? ts;
+            }
+            sPath = map['screenshotUrl']?.toString() ?? '';
           } catch (_) {}
         }
         targetAlert = AlertEvent(
@@ -155,13 +163,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           symbol: sym,
           displayName: '$sym Spot',
           level: lvl,
-          levelPrice: price,
+          levelPrice: target > 0 ? target : price,
           currentPrice: price,
           tolerance: 0.20,
-          screenshotPath: (payload != null && (payload.startsWith('http') || payload.contains('.png') || payload.contains('.jpg'))) ? payload : '',
+          screenshotPath: sPath,
           triggerReason: 'Price level alert triggered',
           telegramStatus: 'SENT',
-          timestamp: DateTime.now(),
+          timestamp: ts,
           isTest: false,
         );
       }
@@ -598,6 +606,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             symbol: event.symbol.isNotEmpty ? event.symbol : _socketService.activeSymbol,
             initialLevel: event.level,
             initialTarget: event.levelPrice > 0 ? event.levelPrice : event.currentPrice,
+            touchPrice: event.currentPrice > 0 ? event.currentPrice : event.levelPrice,
+            touchTimestamp: event.timestamp,
           ),
         ),
       );

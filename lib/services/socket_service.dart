@@ -11,6 +11,7 @@ import 'notification_service.dart';
 class SocketService with WidgetsBindingObserver {
   static final SocketService _instance = SocketService._internal();
   factory SocketService() => _instance;
+  static SocketService get instance => _instance;
   SocketService._internal() {
     WidgetsBinding.instance.addObserver(this);
     // Heartbeat & continuous sync timer (every 5 seconds)

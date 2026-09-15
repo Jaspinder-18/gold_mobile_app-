@@ -281,6 +281,8 @@ class _ScreenshotViewerScreenState extends State<ScreenshotViewerScreen> {
                         symbol: _currentEvent.symbol,
                         initialLevel: _currentEvent.level,
                         initialTarget: _currentEvent.levelPrice > 0 ? _currentEvent.levelPrice : _currentEvent.currentPrice,
+                        touchPrice: _currentEvent.currentPrice > 0 ? _currentEvent.currentPrice : _currentEvent.levelPrice,
+                        touchTimestamp: _currentEvent.timestamp,
                       ),
                     ),
                   );

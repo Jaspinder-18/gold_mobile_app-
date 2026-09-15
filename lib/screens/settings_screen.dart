@@ -866,6 +866,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildAudioAndNotificationCard() {
+    final currentNotifyMode = _soundEnabled && _vibrationEnabled
+        ? AlertNotifyMode.soundAndVibration
+        : (!_soundEnabled && _vibrationEnabled
+            ? AlertNotifyMode.vibrateOnly
+            : (_soundEnabled && !_vibrationEnabled
+                ? AlertNotifyMode.soundOnly
+                : AlertNotifyMode.silent));
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -881,7 +889,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             dense: true,
             leading: const Icon(Icons.notifications_active, color: Color(0xFFF59E0B), size: 22),
             title: const Text('System Push Notifications', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-            subtitle: const Text('Required for lock-screen alarm banner and alert popups', style: TextStyle(color: Colors.white60, fontSize: 10)),
+            subtitle: const Text('Loud alarm notification banner on lock screen & notification shade', style: TextStyle(color: Colors.white60, fontSize: 10)),
             trailing: TextButton(
               style: TextButton.styleFrom(
                 backgroundColor: const Color(0xFF1E293B),
@@ -899,11 +907,105 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const Divider(color: Color(0xFF1E293B)),
+          const SizedBox(height: 6),
+          const Text('Alert Notification Mode:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
+          const SizedBox(height: 8),
+
+          // 4 Alert Notification Mode Choice Cards (including Vibration No Sound)
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            childAspectRatio: 2.3,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+            children: [
+              _buildNotifyModeTile(
+                mode: AlertNotifyMode.soundAndVibration,
+                title: '🔊 Sound + Vibrate',
+                subtitle: 'Loud alarm + vibration',
+                isSelected: currentNotifyMode == AlertNotifyMode.soundAndVibration,
+                onTap: () async {
+                  setState(() {
+                    _soundEnabled = true;
+                    _vibrationEnabled = true;
+                  });
+                  await _audioService.setNotifyMode(AlertNotifyMode.soundAndVibration);
+                },
+              ),
+              _buildNotifyModeTile(
+                mode: AlertNotifyMode.vibrateOnly,
+                title: '📳 Vibration (No Sound)',
+                subtitle: 'Tactile vibration only',
+                isSelected: currentNotifyMode == AlertNotifyMode.vibrateOnly,
+                onTap: () async {
+                  setState(() {
+                    _soundEnabled = false;
+                    _vibrationEnabled = true;
+                  });
+                  await _audioService.setNotifyMode(AlertNotifyMode.vibrateOnly);
+                },
+              ),
+              _buildNotifyModeTile(
+                mode: AlertNotifyMode.soundOnly,
+                title: '🔈 Sound Only',
+                subtitle: 'Loud ringtone, no vibrate',
+                isSelected: currentNotifyMode == AlertNotifyMode.soundOnly,
+                onTap: () async {
+                  setState(() {
+                    _soundEnabled = true;
+                    _vibrationEnabled = false;
+                  });
+                  await _audioService.setNotifyMode(AlertNotifyMode.soundOnly);
+                },
+              ),
+              _buildNotifyModeTile(
+                mode: AlertNotifyMode.silent,
+                title: '🔇 Silent Mode',
+                subtitle: 'Visual banner only',
+                isSelected: currentNotifyMode == AlertNotifyMode.silent,
+                onTap: () async {
+                  setState(() {
+                    _soundEnabled = false;
+                    _vibrationEnabled = false;
+                  });
+                  await _audioService.setNotifyMode(AlertNotifyMode.silent);
+                },
+              ),
+            ],
+          ),
+
+          if (currentNotifyMode == AlertNotifyMode.vibrateOnly) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF3B82F6).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF3B82F6).withValues(alpha: 0.4)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.vibration, color: Color(0xFF60A5FA), size: 16),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Vibration Only active: Alarm ringtones are muted; phone will pulse with tactile vibration on price touches.',
+                      style: TextStyle(color: Color(0xFF93C5FD), fontSize: 10.5, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 10),
+          const Divider(color: Color(0xFF1E293B)),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
-            title: const Text('Alarm Sound on Price Touch', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-            subtitle: const Text('Play loud alarm ringtone when custom target is reached', style: TextStyle(color: Colors.white60, fontSize: 10)),
+            title: const Text('Alarm Ringtone Sound', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+            subtitle: const Text('Play loud alarm audio when price touches target', style: TextStyle(color: Colors.white60, fontSize: 10)),
             value: _soundEnabled,
             activeThumbColor: const Color(0xFFF59E0B),
             onChanged: (val) async {
@@ -914,8 +1016,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
-            title: const Text('Vibrate on Price Touch', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-            subtitle: const Text('Tactile haptic vibration when price touches target', style: TextStyle(color: Colors.white60, fontSize: 10)),
+            title: const Text('Haptic Vibration', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+            subtitle: const Text('Tactile physical vibration when price touches target', style: TextStyle(color: Colors.white60, fontSize: 10)),
             value: _vibrationEnabled,
             activeThumbColor: const Color(0xFFF59E0B),
             onChanged: (val) async {
@@ -1234,6 +1336,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildNotifyModeTile({
+    required AlertNotifyMode mode,
+    required String title,
+    required String subtitle,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF070A12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                  color: isSelected ? const Color(0xFFF59E0B) : Colors.white38,
+                  size: 14,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : Colors.white70,
+                      fontWeight: isSelected ? FontWeight.w900 : FontWeight.bold,
+                      fontSize: 11,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Padding(
+              padding: const EdgeInsets.only(left: 20),
+              child: Text(
+                subtitle,
+                style: TextStyle(
+                  color: isSelected ? const Color(0xFFFBBF24) : Colors.white38,
+                  fontSize: 9,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6, left: 4),
@@ -1249,4 +1416,5 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
+
 

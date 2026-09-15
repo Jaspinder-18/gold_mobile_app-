@@ -19,6 +19,17 @@ enum RingtoneLoopMode {
   const RingtoneLoopMode(this.label, this.seconds);
 }
 
+enum AlertNotifyMode {
+  soundAndVibration('Sound & Vibration', 'Play loud alarm ringtone + haptic vibration'),
+  vibrateOnly('Vibration (No Sound)', 'Repeated haptic vibration without any audio sound'),
+  soundOnly('Sound Only (No Vibration)', 'Play loud alarm ringtone with vibration muted'),
+  silent('Silent Notification', 'Visual screen notification banner only');
+
+  final String label;
+  final String description;
+  const AlertNotifyMode(this.label, this.description);
+}
+
 enum AlertSound {
   alarmClock('Alarm Clock (Loud Digital)', 'alarm_clock.wav'),
   reminderBell('Reminder Bell (Melodic Chime)', 'reminder_bell.wav'),
@@ -34,6 +45,7 @@ enum AlertSound {
 class AudioService {
   static final AudioService _instance = AudioService._internal();
   factory AudioService() => _instance;
+  static AudioService get instance => _instance;
   AudioService._internal();
 
   final AudioPlayer _player = AudioPlayer();
@@ -56,6 +68,13 @@ class AudioService {
   bool get isPlaying => _isPlaying;
   String? get customAudioPath => _customAudioPath;
   String? get customAudioName => _customAudioName;
+
+  AlertNotifyMode get notifyMode {
+    if (_soundEnabled && _vibrationEnabled) return AlertNotifyMode.soundAndVibration;
+    if (!_soundEnabled && _vibrationEnabled) return AlertNotifyMode.vibrateOnly;
+    if (_soundEnabled && !_vibrationEnabled) return AlertNotifyMode.soundOnly;
+    return AlertNotifyMode.silent;
+  }
 
   Future<void> initialize() async {
     try {
@@ -140,6 +159,36 @@ class AudioService {
     await prefs.setDouble('alert_volume', _volume);
   }
 
+  Future<void> setNotifyMode(AlertNotifyMode mode) async {
+    switch (mode) {
+      case AlertNotifyMode.soundAndVibration:
+        _soundEnabled = true;
+        _vibrationEnabled = true;
+        break;
+      case AlertNotifyMode.vibrateOnly:
+        _soundEnabled = false;
+        _vibrationEnabled = true;
+        break;
+      case AlertNotifyMode.soundOnly:
+        _soundEnabled = true;
+        _vibrationEnabled = false;
+        break;
+      case AlertNotifyMode.silent:
+        _soundEnabled = false;
+        _vibrationEnabled = false;
+        break;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('alert_sound_enabled', _soundEnabled);
+    await prefs.setBool('alert_vibration_enabled', _vibrationEnabled);
+    if (!_soundEnabled) {
+      await _player.stop();
+    }
+    if (!_vibrationEnabled) {
+      _vibrationTimer?.cancel();
+    }
+  }
+
   Future<void> setSoundEnabled(bool enabled) async {
     _soundEnabled = enabled;
     final prefs = await SharedPreferences.getInstance();
@@ -185,7 +234,8 @@ class AudioService {
   }
 
   Future<void> playAlertSound({AlertSound? soundOverride, bool isManualTest = false}) async {
-    if (!_soundEnabled && !isManualTest) return;
+    // If both sound and vibration are disabled, and it's not a manual test, do nothing
+    if (!_soundEnabled && !_vibrationEnabled && !isManualTest) return;
 
     try {
       final soundToPlay = soundOverride ?? _currentSound;
@@ -202,38 +252,41 @@ class AudioService {
         await _player.stop();
       } catch (_) {}
 
-      await _applyAudioContext();
-      await _player.setVolume(_volume);
+      if (_soundEnabled || isManualTest) {
+        await _applyAudioContext();
+        await _player.setVolume(_volume);
 
-      if (isManualTest || _loopMode == RingtoneLoopMode.playOnce) {
-        await _player.setReleaseMode(ReleaseMode.release);
-      } else {
-        await _player.setReleaseMode(ReleaseMode.loop);
-        if (_loopMode.seconds > 0) {
-          _stopTimer = Timer(Duration(seconds: _loopMode.seconds), () {
-            stop();
-          });
+        if (isManualTest || _loopMode == RingtoneLoopMode.playOnce) {
+          await _player.setReleaseMode(ReleaseMode.release);
+        } else {
+          await _player.setReleaseMode(ReleaseMode.loop);
+          if (_loopMode.seconds > 0) {
+            _stopTimer = Timer(Duration(seconds: _loopMode.seconds), () {
+              stop();
+            });
+          }
         }
-      }
 
-      if (soundToPlay == AlertSound.customMedia) {
-        if (_customAudioPath != null && File(_customAudioPath!).existsSync()) {
-          try {
-            await _player.play(DeviceFileSource(_customAudioPath!));
-          } catch (e) {
-            debugPrint('[AudioService] DeviceFileSource playback failed: $e, falling back to asset...');
+        if (soundToPlay == AlertSound.customMedia) {
+          if (_customAudioPath != null && File(_customAudioPath!).existsSync()) {
+            try {
+              await _player.play(DeviceFileSource(_customAudioPath!));
+            } catch (e) {
+              debugPrint('[AudioService] DeviceFileSource playback failed: $e, falling back to asset...');
+              await _playAssetFile('alarm_clock.wav');
+            }
+          } else {
             await _playAssetFile('alarm_clock.wav');
           }
         } else {
-          await _playAssetFile('alarm_clock.wav');
+          await _playAssetFile(soundToPlay.fileName);
         }
-      } else {
-        await _playAssetFile(soundToPlay.fileName);
       }
+
       _isPlaying = true;
 
-      // Start periodic vibration during alarm if enabled
-      if (_vibrationEnabled) {
+      // Start periodic vibration during alarm if enabled (even if sound is muted in Vibrate Only mode)
+      if (_vibrationEnabled || isManualTest) {
         HapticFeedback.heavyImpact();
         if (!isManualTest && _loopMode != RingtoneLoopMode.playOnce) {
           _vibrationTimer = Timer.periodic(const Duration(seconds: 2), (_) {
@@ -243,6 +296,11 @@ class AudioService {
               _vibrationTimer?.cancel();
             }
           });
+          if (!_soundEnabled && _loopMode.seconds > 0) {
+            _stopTimer = Timer(Duration(seconds: _loopMode.seconds), () {
+              stop();
+            });
+          }
         }
       }
     } catch (e) {
@@ -290,5 +348,71 @@ class AudioService {
       debugPrint('[AudioService] stop error: $e');
     }
     _isPlaying = false;
+  }
+
+  static Future<void> playAlertSoundDirect({String fileName = 'alarm_clock.wav', int loopSeconds = 30}) async {
+    try {
+      final AudioPlayer bgPlayer = AudioPlayer();
+      try {
+        await bgPlayer.setAudioContext(
+          AudioContext(
+            android: AudioContextAndroid(
+              isSpeakerphoneOn: true,
+              stayAwake: true,
+              contentType: AndroidContentType.sonification,
+              usageType: AndroidUsageType.alarm,
+              audioFocus: AndroidAudioFocus.gainTransientExclusive,
+            ),
+            iOS: AudioContextIOS(
+              category: AVAudioSessionCategory.playback,
+              options: const {
+                AVAudioSessionOptions.defaultToSpeaker,
+                AVAudioSessionOptions.duckOthers,
+              },
+            ),
+          ),
+        );
+      } catch (_) {}
+      try {
+        await bgPlayer.setVolume(1.0);
+      } catch (_) {}
+      try {
+        await bgPlayer.setReleaseMode(ReleaseMode.loop);
+      } catch (_) {}
+      try {
+        HapticFeedback.heavyImpact();
+      } catch (_) {}
+
+      bool playedOk = false;
+      try {
+        final byteData = await rootBundle.load('assets/sounds/$fileName');
+        final bytes = byteData.buffer.asUint8List();
+        await bgPlayer.play(BytesSource(bytes));
+        playedOk = true;
+      } catch (_) {}
+      if (!playedOk) {
+        try {
+          await bgPlayer.play(AssetSource('sounds/$fileName'));
+          playedOk = true;
+        } catch (_) {}
+      }
+      if (!playedOk) {
+        try {
+          await bgPlayer.play(AssetSource('assets/sounds/$fileName'));
+          playedOk = true;
+        } catch (_) {}
+      }
+
+      if (playedOk) {
+        Timer(Duration(seconds: loopSeconds), () async {
+          try {
+            await bgPlayer.stop();
+            await bgPlayer.dispose();
+          } catch (_) {}
+        });
+      }
+    } catch (e) {
+      debugPrint('[AudioService] playAlertSoundDirect error: $e');
+    }
   }
 }

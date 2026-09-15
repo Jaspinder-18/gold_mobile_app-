@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import '../models/market_data.dart';
 import '../services/socket_service.dart';
 import '../services/audio_service.dart';
@@ -9,12 +10,16 @@ class LiveChartScreen extends StatefulWidget {
   final String symbol;
   final String? initialLevel;
   final double? initialTarget;
+  final double? touchPrice;
+  final DateTime? touchTimestamp;
 
   const LiveChartScreen({
     super.key,
     required this.symbol,
     this.initialLevel,
     this.initialTarget,
+    this.touchPrice,
+    this.touchTimestamp,
   });
 
   @override
@@ -30,6 +35,9 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
   String _tickDirection = 'UP';
   final TextEditingController _targetController = TextEditingController();
   bool _isSavingAlert = false;
+  double? _touchPrice;
+  DateTime? _touchTimestamp;
+  String? _touchLevel;
 
   // Chart state
   String _selectedTf = '5';
@@ -40,6 +48,9 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
   void initState() {
     super.initState();
     _currentSymbol = widget.symbol;
+    _touchPrice = widget.touchPrice ?? widget.initialTarget;
+    _touchTimestamp = widget.touchTimestamp;
+    _touchLevel = widget.initialLevel;
     AudioService().stop();
     _initSymbolAndListeners();
   }
@@ -327,6 +338,7 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
                     currentPrice: currentPrice,
                     pivots: _extractPivots(),
                     targetPrice: _config.customPriceAlertTarget > 0 ? _config.customPriceAlertTarget : (widget.initialTarget ?? 0.0),
+                    touchPrice: _touchPrice,
                     activeAlerts: _socketService.activeAlerts,
                     isTickUp: isTickUp,
                     zoomScale: _zoomScale,
@@ -336,6 +348,115 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
               ),
             ),
           ),
+
+          // 3.1 Prominent Touch Event Information Card (White Line Marker & Timestamp)
+          if (_touchPrice != null && _touchPrice! > 0)
+            Container(
+              margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F172A),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 1.2),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.touch_app_rounded, color: Colors.white, size: 16),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: const BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  'WHITE LINE TOUCH: \$${_touchPrice!.toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 12,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (_touchLevel != null && _touchLevel!.isNotEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF59E0B),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  _touchLevel!,
+                                  style: const TextStyle(color: Colors.black, fontSize: 9.5, fontWeight: FontWeight.w900),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 3),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.access_time_filled, color: Colors.white70, size: 12),
+                                const SizedBox(width: 4),
+                                Text(
+                                  DateFormat('dd MMM yyyy · HH:mm:ss').format(_touchTimestamp ?? DateTime.now()),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 11,
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              'Live: \$${currentPrice.toStringAsFixed(2)} (${(currentPrice - _touchPrice!) >= 0 ? '+' : ''}${(currentPrice - _touchPrice!).toStringAsFixed(2)})',
+                              style: TextStyle(
+                                color: (currentPrice - _touchPrice!) >= 0 ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                                fontSize: 10,
+                                fontFamily: 'monospace',
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           // 4. Quick Target Adjustment & Active Alerts Drawer
           Container(
@@ -409,6 +530,7 @@ class _RealtimeLiveChartPainter extends CustomPainter {
   final double currentPrice;
   final Map<String, double> pivots;
   final double targetPrice;
+  final double? touchPrice;
   final List<PriceAlertModel> activeAlerts;
   final bool isTickUp;
   final double zoomScale;
@@ -418,6 +540,7 @@ class _RealtimeLiveChartPainter extends CustomPainter {
     required this.currentPrice,
     required this.pivots,
     required this.targetPrice,
+    this.touchPrice,
     required this.activeAlerts,
     required this.isTickUp,
     required this.zoomScale,
@@ -431,6 +554,7 @@ class _RealtimeLiveChartPainter extends CustomPainter {
     // 1. Calculate price range bounds
     final prices = <double>[currentPrice];
     if (targetPrice > 0) prices.add(targetPrice);
+    if (touchPrice != null && touchPrice! > 0) prices.add(touchPrice!);
     for (final a in activeAlerts) {
       if (a.targetPrice > 0) prices.add(a.targetPrice);
     }
@@ -596,6 +720,50 @@ class _RealtimeLiveChartPainter extends CustomPainter {
       tp.paint(canvas, Offset(17, y - 7));
     }
 
+    // 5.1 Draw White Price Touch Line & Timestamp Marker
+    if (touchPrice != null && touchPrice! > 0) {
+      final touchY = getY(touchPrice!);
+      if (touchY >= 0 && touchY <= size.height) {
+        // Glowing white line effect
+        canvas.drawLine(
+          Offset(0, touchY),
+          Offset(size.width, touchY),
+          Paint()
+            ..color = Colors.white.withValues(alpha: 0.35)
+            ..strokeWidth = 6.0,
+        );
+        // Solid crisp white horizontal line
+        canvas.drawLine(
+          Offset(0, touchY),
+          Offset(size.width, touchY),
+          Paint()
+            ..color = Colors.white
+            ..strokeWidth = 2.2,
+        );
+
+        final touchText = '⚪ TOUCHED @ \$${touchPrice!.toStringAsFixed(2)}';
+        final tp = TextPainter(
+          text: TextSpan(
+            text: touchText,
+            style: const TextStyle(
+              color: Colors.black,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w900,
+              fontFamily: 'monospace',
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+
+        final badgeRect = RRect.fromRectAndRadius(
+          Rect.fromLTWH(size.width - tp.width - 20, touchY - 9, tp.width + 12, 18),
+          const Radius.circular(4),
+        );
+        canvas.drawRRect(badgeRect, Paint()..color = Colors.white);
+        tp.paint(canvas, Offset(size.width - tp.width - 14, touchY - 7));
+      }
+    }
+
     // 6. Draw Glowing Live Current Price Line
     final liveY = getY(currentPrice);
     final liveColor = isTickUp ? const Color(0xFF10B981) : const Color(0xFFEF4444);
@@ -634,6 +802,7 @@ class _RealtimeLiveChartPainter extends CustomPainter {
   bool shouldRepaint(covariant _RealtimeLiveChartPainter oldDelegate) {
     return oldDelegate.currentPrice != currentPrice ||
         oldDelegate.targetPrice != targetPrice ||
+        oldDelegate.touchPrice != touchPrice ||
         oldDelegate.isTickUp != isTickUp ||
         oldDelegate.zoomScale != zoomScale ||
         oldDelegate.panOffset != panOffset ||

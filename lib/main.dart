@@ -12,7 +12,6 @@ import 'services/background_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Set system UI to immersive dark
   try {
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
@@ -24,7 +23,6 @@ void main() async {
     );
   } catch (_) {}
 
-  // Initialize Firebase Core safely without blocking UI
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
@@ -39,28 +37,25 @@ void main() async {
     debugPrint('[Main] Firebase Core init note (continuing smoothly): $fbErr');
   }
 
-  // Fast audio service initialization
   try {
-    await AudioService().initialize().timeout(const Duration(seconds: 2));
+    await AudioService.instance.initialize().timeout(const Duration(seconds: 2));
   } catch (_) {}
 
-  // Launch UI immediately so the user NEVER gets stuck on a black screen!
+  try {
+    await BackgroundService.instance.initialize();
+  } catch (_) {}
+
   runApp(const GoldAlertApp());
 
-  // Spin up asynchronous network and notification services in parallel
   Future.microtask(() async {
     try {
-      await NotificationService().initialize().timeout(const Duration(seconds: 15));
+      await NotificationService.instance.initialize().timeout(const Duration(seconds: 15));
     } catch (e) {
       debugPrint('[Main] NotificationService init notice: $e');
     }
 
     try {
-      await BackgroundService().stopService();
-    } catch (_) {}
-
-    try {
-      await SocketService().initialize();
+      await SocketService.instance.initialize();
     } catch (_) {}
   });
 }
