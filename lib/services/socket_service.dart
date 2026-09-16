@@ -15,8 +15,8 @@ class SocketService with WidgetsBindingObserver {
   
   SocketService._internal() {
     WidgetsBinding.instance.addObserver(this);
-    // Continuous live sync timer: checks socket health & polls latest price every 2.5 seconds
-    _heartbeatTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
+    // Continuous live sync timer: checks socket health & polls latest price every 1.5 seconds
+    _heartbeatTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
       _checkHealthAndSync();
     });
 
