@@ -880,6 +880,8 @@ class SocketService with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+    _renderKeepAliveTimer?.cancel();
+    _renderKeepAliveTimer = null;
     disconnectSocket();
   }
 }
