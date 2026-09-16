@@ -500,11 +500,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             style: TextStyle(color: Colors.white38, fontSize: 11),
                           ),
                           Text(
-                            DateFormat('HH:mm:ss · dd MMM yyyy').format(event.timestamp),
+                            formatIstDateTime(event.timestamp),
                             style: const TextStyle(
-                              color: Colors.white60,
+                              color: Colors.white70,
                               fontSize: 11,
                               fontFamily: 'monospace',
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
@@ -852,7 +853,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         children: [
           _buildMonitorTab(currentPrice, latestAlertWithImage),
           _buildScreenshotsTab(),
-          _buildAlertsTab(),
+          LiveChartScreen(
+            key: ValueKey('live_tab_${_socketService.activeSymbol}'),
+            symbol: _socketService.activeSymbol,
+            isEmbedded: true,
+          ),
           SettingsScreen(
             onBackToMonitor: () {
               if (mounted) setState(() => _currentTabIndex = 0);
@@ -878,7 +883,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           items: const [
             BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined, size: 20), activeIcon: Icon(Icons.dashboard, size: 20), label: 'Monitor'),
             BottomNavigationBarItem(icon: Icon(Icons.photo_library_outlined, size: 20), activeIcon: Icon(Icons.photo_library, size: 20), label: 'Captures'),
-            BottomNavigationBarItem(icon: Icon(Icons.notifications_none, size: 20), activeIcon: Icon(Icons.notifications, size: 20), label: 'Alerts'),
+            BottomNavigationBarItem(icon: Icon(Icons.candlestick_chart_rounded, size: 20), activeIcon: Icon(Icons.candlestick_chart, size: 20), label: 'Live'),
             BottomNavigationBarItem(icon: Icon(Icons.settings_outlined, size: 20), activeIcon: Icon(Icons.settings, size: 20), label: 'Config'),
           ],
         ),
@@ -1652,7 +1657,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               itemBuilder: (context, index) {
                 final alert = _alerts[index];
                 final imageUrl = _formatImageUrl(alert.screenshotPath);
-                final dateFormat = DateFormat('HH:mm:ss · dd MMM');
 
                 return Container(
                   margin: const EdgeInsets.only(bottom: 10),
@@ -1698,8 +1702,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               ],
                             ),
                             Text(
-                              dateFormat.format(alert.timestamp),
-                              style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace'),
+                              formatIstShort(alert.timestamp),
+                              style: const TextStyle(color: Colors.white60, fontSize: 10, fontFamily: 'monospace', fontWeight: FontWeight.w600),
                             ),
                             IconButton(
                               icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 18),
@@ -1707,71 +1711,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             ),
                           ],
                         ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-    );
-  }
-
-  Widget _buildAlertsTab() {
-    final dateFormat = DateFormat('HH:mm:ss · dd MMM yyyy');
-
-    return Scaffold(
-      backgroundColor: const Color(0xFF070A12),
-      body: _alerts.isEmpty
-          ? const Center(
-              child: Text('No alert events recorded yet.', style: TextStyle(color: Colors.white38, fontSize: 12)),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: _alerts.length,
-              itemBuilder: (context, index) {
-                final alert = _alerts[index];
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0E1626),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: const Color(0xFF1E293B)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: const Color(0xFFF59E0B)),
-                        ),
-                        child: Text(
-                          alert.level,
-                          style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.w900, fontSize: 12),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Touched Level: \$${alert.currentPrice.toStringAsFixed(2)}',
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, fontFamily: 'monospace'),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              dateFormat.format(alert.timestamp),
-                              style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace'),
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.fullscreen, color: Color(0xFFF59E0B), size: 20),
-                        onPressed: () => _openScreenshotViewer(alert),
                       ),
                     ],
                   ),

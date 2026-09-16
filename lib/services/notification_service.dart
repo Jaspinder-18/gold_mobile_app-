@@ -19,6 +19,79 @@ import 'audio_service.dart';
 
 const int kAlertNotificationId = 1001;
 
+class NotificationChannelConfig {
+  final String id;
+  final String name;
+  final String description;
+  final String? soundResource;
+  final bool playSound;
+  final bool enableVibration;
+
+  const NotificationChannelConfig({
+    required this.id,
+    required this.name,
+    required this.description,
+    this.soundResource,
+    this.playSound = true,
+    this.enableVibration = true,
+  });
+}
+
+NotificationChannelConfig getChannelForSound(String? soundName, bool soundEnabled, bool vibrationEnabled) {
+  if (!soundEnabled || soundName == 'vibrateOnly') {
+    return const NotificationChannelConfig(
+      id: 'gold_channel_vibrate_only',
+      name: '📳 Price Level Alarms (Vibrate Only)',
+      description: 'Vibration only alerts without sound for market price touches',
+      playSound: false,
+      enableVibration: true,
+    );
+  }
+
+  if (soundName == 'radarAlert') {
+    return const NotificationChannelConfig(
+      id: 'gold_channel_radar_v2',
+      name: '🚨 Sound 1: Urgent Radar Alarm',
+      description: 'Urgent radar alarm tone for market price touches',
+      soundResource: 'radar_alert',
+      playSound: true,
+      enableVibration: true,
+    );
+  }
+
+  if (soundName == 'reminderBell') {
+    return const NotificationChannelConfig(
+      id: 'gold_channel_reminder_bell_v2',
+      name: '🔔 Sound 3: Melodic Chime Bell',
+      description: 'Melodic chime bell tone for market price touches',
+      soundResource: 'reminder_bell',
+      playSound: true,
+      enableVibration: true,
+    );
+  }
+
+  if (soundName == 'deviceSound') {
+    return const NotificationChannelConfig(
+      id: 'gold_channel_device_default_v2',
+      name: '📁 Custom Sound from Device',
+      description: 'Custom device notification tone for market price touches',
+      soundResource: 'reminder_bell',
+      playSound: true,
+      enableVibration: true,
+    );
+  }
+
+  // Default: alarmClock
+  return const NotificationChannelConfig(
+    id: 'gold_channel_alarm_clock_v2',
+    name: '⏰ Sound 2: Digital Alarm Clock',
+    description: 'Digital alarm clock tone for market price touches',
+    soundResource: 'alarm_clock',
+    playSound: true,
+    enableVibration: true,
+  );
+}
+
 Future<void> _acquireWakeLock() async {
   // Keep empty to avoid popping over lock screen or hijacking keyguard
 }
@@ -48,8 +121,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   try {
     final prefs = await SharedPreferences.getInstance();
-    final soundEnabled = prefs.getBool('alert_sound_enabled') ?? true;
+    final soundName = prefs.getString('alert_sound') ?? 'radarAlert';
+    final soundEnabled = prefs.getBool('alert_sound_enabled') ?? (soundName != 'vibrateOnly');
     final vibrationEnabled = prefs.getBool('alert_vibration_enabled') ?? true;
+    final channelConfig = getChannelForSound(soundName, soundEnabled, vibrationEnabled);
 
     final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -73,33 +148,73 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     final androidImpl = flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     if (androidImpl != null) {
-      final alarmChannel = AndroidNotificationChannel(
-        'gold_price_alerts_v5',
-        '🚨 High Priority Price Level Alarms',
-        description: 'Loud alarm clock notifications for market price touches',
-        importance: Importance.max,
-        playSound: true,
-        sound: const RawResourceAndroidNotificationSound('alarm_clock'),
-        enableVibration: true,
-        vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
-        enableLights: true,
-        showBadge: true,
-      );
-      final vibrateOnlyChannel = AndroidNotificationChannel(
-        'gold_price_alerts_vibrate_only',
-        '📳 Price Level Alarms (Vibrate Only)',
-        description: 'Vibration only alerts without sound for market price touches',
-        importance: Importance.max,
-        playSound: false,
-        enableVibration: true,
-        vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
-        enableLights: true,
-        showBadge: true,
-      );
-      try {
-        await androidImpl.createNotificationChannel(alarmChannel);
-        await androidImpl.createNotificationChannel(vibrateOnlyChannel);
-      } catch (_) {}
+      final channels = [
+        AndroidNotificationChannel(
+          'gold_channel_radar_v2',
+          '🚨 Sound 1: Urgent Radar Alarm',
+          description: 'Urgent radar alarm tone for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('radar_alert'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+        AndroidNotificationChannel(
+          'gold_channel_alarm_clock_v2',
+          '⏰ Sound 2: Digital Alarm Clock',
+          description: 'Digital alarm clock tone for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('alarm_clock'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+        AndroidNotificationChannel(
+          'gold_channel_reminder_bell_v2',
+          '🔔 Sound 3: Melodic Chime Bell',
+          description: 'Melodic chime bell tone for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('reminder_bell'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+        AndroidNotificationChannel(
+          'gold_channel_vibrate_only',
+          '📳 Price Level Alarms (Vibrate Only)',
+          description: 'Vibration only alerts without sound for market price touches',
+          importance: Importance.max,
+          playSound: false,
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+        AndroidNotificationChannel(
+          'gold_channel_device_default_v2',
+          '📁 Custom Sound from Device',
+          description: 'Custom device notification tone for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('reminder_bell'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+      ];
+
+      for (final c in channels) {
+        try {
+          await androidImpl.createNotificationChannel(c);
+        } catch (_) {}
+      }
     }
 
     final data = message.data;
@@ -152,15 +267,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
             summaryText: '$symbol Alert Terminal',
           );
 
-    final isVibrateOnly = !soundEnabled && vibrationEnabled;
-    final activeChannelId = isVibrateOnly ? 'gold_price_alerts_vibrate_only' : 'gold_price_alerts_v5';
-
     final androidDetails = AndroidNotificationDetails(
-      activeChannelId,
-      isVibrateOnly ? '📳 Price Level Alarms (Vibrate Only)' : '🚨 High Priority Price Level Alarms',
-      channelDescription: isVibrateOnly
-          ? 'Vibration only alerts without sound for market price touches'
-          : 'Loud alarm clock notifications for market price touches',
+      channelConfig.id,
+      channelConfig.name,
+      channelDescription: channelConfig.description,
       importance: Importance.max,
       priority: Priority.max,
       fullScreenIntent: false,
@@ -169,10 +279,12 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       showWhen: true,
       when: DateTime.now().millisecondsSinceEpoch,
       timeoutAfter: 300000,
-      playSound: soundEnabled,
-      sound: soundEnabled ? const RawResourceAndroidNotificationSound('alarm_clock') : null,
-      enableVibration: vibrationEnabled,
-      vibrationPattern: vibrationEnabled ? Int64List.fromList([0, 1000, 500, 1000, 500, 1000]) : null,
+      playSound: channelConfig.playSound,
+      sound: (channelConfig.playSound && channelConfig.soundResource != null)
+          ? RawResourceAndroidNotificationSound(channelConfig.soundResource!)
+          : null,
+      enableVibration: channelConfig.enableVibration,
+      vibrationPattern: channelConfig.enableVibration ? Int64List.fromList([0, 1000, 500, 1000, 500, 1000]) : null,
       enableLights: true,
       ledColor: const Color(0xFFF59E0B),
       ledOnMs: 500,
@@ -315,57 +427,76 @@ class NotificationService {
       onDidReceiveBackgroundNotificationResponse: _bgNotificationTap,
     );
 
-    final alarmChannel = AndroidNotificationChannel(
-      channelId,
-      channelName,
-      description: channelDescription,
-      importance: Importance.max,
-      playSound: true,
-      sound: const RawResourceAndroidNotificationSound('alarm_clock'),
-      enableVibration: true,
-      vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
-      enableLights: true,
-      ledColor: const Color(0xFFF59E0B),
-      showBadge: true,
-    );
-
-    final vibrateOnlyChannel = AndroidNotificationChannel(
-      'gold_price_alerts_vibrate_only',
-      '📳 Price Level Alarms (Vibrate Only)',
-      description: 'Vibration only alerts without sound for market price touches',
-      importance: Importance.max,
-      playSound: false,
-      enableVibration: true,
-      vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
-      enableLights: true,
-      ledColor: const Color(0xFFF59E0B),
-      showBadge: true,
-    );
-
-    final standardChannel = AndroidNotificationChannel(
-      'gold_alerts_channel_standard',
-      '🔔 Market Price Touch Alerts',
-      description: 'Instant notification alerts when market touches custom target price',
-      importance: Importance.max,
-      playSound: true,
-      enableVibration: true,
-      vibrationPattern: Int64List.fromList([0, 800, 400, 800]),
-      enableLights: true,
-      showBadge: true,
-    );
-
     final androidImpl = _notificationsPlugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     if (androidImpl != null) {
-      try {
-        await androidImpl.createNotificationChannel(alarmChannel);
-      } catch (_) {}
-      try {
-        await androidImpl.createNotificationChannel(vibrateOnlyChannel);
-      } catch (_) {}
-      try {
-        await androidImpl.createNotificationChannel(standardChannel);
-      } catch (_) {}
+      final channels = [
+        AndroidNotificationChannel(
+          'gold_channel_radar_v2',
+          '🚨 Sound 1: Urgent Radar Alarm',
+          description: 'Urgent radar alarm tone for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('radar_alert'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+        AndroidNotificationChannel(
+          'gold_channel_alarm_clock_v2',
+          '⏰ Sound 2: Digital Alarm Clock',
+          description: 'Digital alarm clock tone for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('alarm_clock'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+        AndroidNotificationChannel(
+          'gold_channel_reminder_bell_v2',
+          '🔔 Sound 3: Melodic Chime Bell',
+          description: 'Melodic chime bell tone for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('reminder_bell'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+        AndroidNotificationChannel(
+          'gold_channel_vibrate_only',
+          '📳 Price Level Alarms (Vibrate Only)',
+          description: 'Vibration only alerts without sound for market price touches',
+          importance: Importance.max,
+          playSound: false,
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+        AndroidNotificationChannel(
+          'gold_channel_device_default_v2',
+          '📁 Custom Sound from Device',
+          description: 'Custom device notification tone for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('reminder_bell'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
+      ];
+
+      for (final c in channels) {
+        try {
+          await androidImpl.createNotificationChannel(c);
+        } catch (_) {}
+      }
       try {
         final granted = await androidImpl.requestNotificationsPermission();
         _hasPermission = granted ?? false;
@@ -801,10 +932,10 @@ class NotificationService {
       body = 'Target: \$${validTargetPrice.toStringAsFixed(2)} · ${isResistance ? "Resistance" : "Support"} Level';
     }
 
+    final soundName = AudioService.instance.currentSound.name;
     final isSoundEnabled = AudioService.instance.soundEnabled;
     final isVibrationEnabled = AudioService.instance.vibrationEnabled;
-    final isVibrateOnly = !isSoundEnabled && isVibrationEnabled;
-    final activeChannelId = isVibrateOnly ? 'gold_price_alerts_vibrate_only' : channelId;
+    final channelConfig = getChannelForSound(soundName, isSoundEnabled, isVibrationEnabled);
 
     // Download screenshot image for rich BigPicture notification
     final imageBytes = await _downloadImageBytes(event.screenshotPath);
@@ -824,11 +955,9 @@ class NotificationService {
 
     try {
       final androidDetails = AndroidNotificationDetails(
-        activeChannelId,
-        isVibrateOnly ? '📳 Price Level Alarms (Vibrate Only)' : channelName,
-        channelDescription: isVibrateOnly
-            ? 'Vibration only alerts without sound for market price touches'
-            : channelDescription,
+        channelConfig.id,
+        channelConfig.name,
+        channelDescription: channelConfig.description,
         importance: Importance.max,
         priority: Priority.max,
         fullScreenIntent: false,
@@ -837,10 +966,12 @@ class NotificationService {
         showWhen: true,
         when: DateTime.now().millisecondsSinceEpoch,
         timeoutAfter: 300000,
-        playSound: isSoundEnabled,
-        sound: isSoundEnabled ? const RawResourceAndroidNotificationSound('alarm_clock') : null,
-        enableVibration: isVibrationEnabled,
-        vibrationPattern: isVibrationEnabled ? Int64List.fromList([0, 1000, 500, 1000, 500, 1000]) : null,
+        playSound: channelConfig.playSound,
+        sound: (channelConfig.playSound && channelConfig.soundResource != null)
+            ? RawResourceAndroidNotificationSound(channelConfig.soundResource!)
+            : null,
+        enableVibration: channelConfig.enableVibration,
+        vibrationPattern: channelConfig.enableVibration ? Int64List.fromList([0, 1000, 500, 1000, 500, 1000]) : null,
         enableLights: true,
         ledColor: const Color(0xFFF59E0B),
         ledOnMs: 500,

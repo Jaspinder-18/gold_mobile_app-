@@ -67,7 +67,6 @@ class _ScreenshotViewerScreenState extends State<ScreenshotViewerScreen> {
   Widget build(BuildContext context) {
     final imageUrl = _getValidImageUrl(_currentEvent.screenshotPath);
     final levelColor = _getLevelColor(_currentEvent.level);
-    final dateFormat = DateFormat('MMM dd, yyyy · HH:mm:ss');
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -217,8 +216,8 @@ class _ScreenshotViewerScreenState extends State<ScreenshotViewerScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    dateFormat.format(_currentEvent.timestamp),
-                    style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 11, fontFamily: 'monospace'),
+                    formatIstDateTime(_currentEvent.timestamp),
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 8),
                   Text(

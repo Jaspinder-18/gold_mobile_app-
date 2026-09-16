@@ -12,6 +12,7 @@ class LiveChartScreen extends StatefulWidget {
   final double? initialTarget;
   final double? touchPrice;
   final DateTime? touchTimestamp;
+  final bool isEmbedded;
 
   const LiveChartScreen({
     super.key,
@@ -20,6 +21,7 @@ class LiveChartScreen extends StatefulWidget {
     this.initialTarget,
     this.touchPrice,
     this.touchTimestamp,
+    this.isEmbedded = false,
   });
 
   @override
@@ -181,7 +183,7 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
           "autosize": true,
           "symbol": "$tvTicker",
           "interval": "$interval",
-          "timezone": "Etc/UTC",
+          "timezone": "Asia/Kolkata",
           "theme": "dark",
           "style": "1",
           "locale": "en",
@@ -376,10 +378,13 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
           : AppBar(
               backgroundColor: const Color(0xFF090E1A),
               elevation: 0,
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
-                onPressed: () => Navigator.pop(context),
-              ),
+              automaticallyImplyLeading: !widget.isEmbedded,
+              leading: widget.isEmbedded
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+                      onPressed: () => Navigator.pop(context),
+                    ),
               title: Row(
                 children: [
                   Column(
@@ -834,7 +839,7 @@ class _LiveChartScreenState extends State<LiveChartScreen> {
                                     const Icon(Icons.access_time_filled, color: Colors.white70, size: 12),
                                     const SizedBox(width: 4),
                                     Text(
-                                      DateFormat('dd MMM yyyy · HH:mm:ss').format(_touchTimestamp ?? DateTime.now()),
+                                      formatIstDateTime(_touchTimestamp ?? DateTime.now()),
                                       style: const TextStyle(
                                         color: Colors.white70,
                                         fontSize: 11,

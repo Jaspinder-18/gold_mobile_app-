@@ -1,3 +1,28 @@
+import 'package:intl/intl.dart';
+
+DateTime toIst(DateTime dt) {
+  final utc = dt.isUtc ? dt : dt.toUtc();
+  return utc.add(const Duration(hours: 5, minutes: 30));
+}
+
+String formatIstTime(DateTime? dt) {
+  if (dt == null) return '--:--:--';
+  final ist = toIst(dt);
+  return DateFormat('hh:mm:ss a').format(ist);
+}
+
+String formatIstDateTime(DateTime? dt) {
+  if (dt == null) return '--';
+  final ist = toIst(dt);
+  return '${DateFormat('dd MMM yyyy · hh:mm:ss a').format(ist)} IST';
+}
+
+String formatIstShort(DateTime? dt) {
+  if (dt == null) return '--';
+  final ist = toIst(dt);
+  return '${DateFormat('hh:mm:ss a · dd MMM').format(ist)} IST';
+}
+
 double _toDouble(dynamic val, [double fallback = 0.0]) {
   if (val == null) return fallback;
   if (val is num) return val.toDouble();

@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/market_data.dart';
 import '../services/audio_service.dart';
-import '../services/notification_service.dart';
-import '../services/onesignal_service.dart';
 import '../services/socket_service.dart';
 import '../services/auth_service.dart';
 import 'auth_screen.dart';
@@ -17,30 +15,19 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final _serverUrlController = TextEditingController();
-  final _customTargetPriceController = TextEditingController();
-  final _onesignalAppIdController = TextEditingController();
-
   final _audioService = AudioService();
   final _socketService = SocketService();
-  final _notificationService = NotificationService();
 
   late AlertSound _selectedSound;
   late RingtoneLoopMode _selectedLoopMode;
   late double _volume;
-  late bool _soundEnabled;
-  late bool _vibrationEnabled;
 
   // Chart settings
   late AppTimeframe _selectedTimeframe;
   late AppChartRange _selectedRange;
   late AppBarSpacing _selectedBarSpacing;
 
-  // Custom alert settings
-  late bool _customPriceAlertEnabled;
   bool _isSaving = false;
-  bool _isTestingPing = false;
-  String? _pingResult;
 
   @override
   void initState() {
@@ -50,21 +37,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _loadCurrentConfig() async {
     final cfg = _socketService.currentConfig;
-    _serverUrlController.text = _socketService.serverUrl;
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      _onesignalAppIdController.text = prefs.getString('onesignal_app_id') ?? '';
-    } catch (_) {}
-
-    _customPriceAlertEnabled = cfg.customPriceAlertEnabled;
-    _customTargetPriceController.text = cfg.customPriceAlertTarget > 0 ? cfg.customPriceAlertTarget.toStringAsFixed(2) : '';
 
     _selectedSound = _audioService.currentSound;
     _selectedLoopMode = _audioService.loopMode;
     _volume = _audioService.volume;
-    _soundEnabled = _audioService.soundEnabled;
-    _vibrationEnabled = _audioService.vibrationEnabled;
 
     _selectedTimeframe = AppTimeframe.fromString(cfg.chartTimeframe);
     _selectedRange = AppChartRange.fromString(cfg.chartRange);
@@ -75,61 +51,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _audioService.stop();
-    _serverUrlController.dispose();
-    _customTargetPriceController.dispose();
-    _onesignalAppIdController.dispose();
     super.dispose();
   }
 
   Future<void> _handleSaveAll() async {
     setState(() => _isSaving = true);
     try {
-      final customTarget = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? _socketService.currentConfig.customPriceAlertTarget;
-
-      // 1. Save Audio & Notification Settings locally
+      // 1. Save Audio Settings locally
       await _audioService.setSound(_selectedSound);
       await _audioService.setLoopMode(_selectedLoopMode);
       await _audioService.setVolume(_volume);
-      await _audioService.setSoundEnabled(_soundEnabled);
-      await _audioService.setVibrationEnabled(_vibrationEnabled);
 
-      // 2. Save OneSignal App ID
-      if (_onesignalAppIdController.text.trim().isNotEmpty) {
-        await OneSignalService().setAppId(_onesignalAppIdController.text.trim());
-      }
-
-      // 3. Update server URL if changed FIRST
-      final newUrl = _serverUrlController.text.trim();
-      if (newUrl.isNotEmpty && newUrl != _socketService.serverUrl) {
-        await _socketService.updateServerUrl(newUrl);
-      }
-
-      // 3. Cache custom alert & chart settings locally in SharedPreferences
+      // 2. Cache chart settings locally in SharedPreferences
       try {
         final prefs = await SharedPreferences.getInstance();
         final sym = _socketService.activeSymbol.toUpperCase();
-        await prefs.setDouble('custom_target_price_$sym', customTarget);
-        await prefs.setDouble('custom_price_alert_target_$sym', customTarget);
-        await prefs.setBool('custom_price_alert_enabled_$sym', _customPriceAlertEnabled);
         await prefs.setString('chart_timeframe_$sym', _selectedTimeframe.apiValue);
         await prefs.setString('chart_range_$sym', _selectedRange.label);
         await prefs.setInt('bar_spacing_$sym', _selectedBarSpacing.px);
       } catch (_) {}
 
-      // 4. Update custom price alert
-      if (_customPriceAlertEnabled && customTarget > 0) {
-        _socketService.createCustomAlert(targetPrice: customTarget);
-      } else if (!_customPriceAlertEnabled) {
-        _socketService.clearAllCustomAlerts();
-      }
-
-      // 5. Update remote config (optimistic local + remote sync)
+      // 3. Update remote config
       final synced = await _socketService.updateRemoteConfig({
         'chartTimeframe': _selectedTimeframe.apiValue,
         'chartRange': _selectedRange.label,
         'barSpacing': _selectedBarSpacing.px,
-        'customPriceAlertEnabled': _customPriceAlertEnabled,
-        'customPriceAlertTarget': customTarget,
       });
 
       if (mounted) {
@@ -166,97 +112,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
-    }
-  }
-
-  Future<void> _handleCancelAlert() async {
-    setState(() => _isSaving = true);
-    try {
-      final ok = await _socketService.deleteCustomPriceAlert();
-      if (mounted) {
-        setState(() {
-          _customPriceAlertEnabled = false;
-          _customTargetPriceController.clear();
-          _isSaving = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: ok ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-            content: Text(ok ? '✓ Custom Alert Cancelled and Monitoring Stopped.' : 'Failed to cancel alert.'),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isSaving = false);
-    }
-  }
-
-  Future<void> _handleTestPing() async {
-    setState(() {
-      _isTestingPing = true;
-      _pingResult = null;
-    });
-    final res = await _socketService.checkServerConnectivity();
-    if (mounted) {
-      setState(() {
-        _isTestingPing = false;
-        _pingResult = res['message']?.toString();
-      });
-    }
-  }
-
-  Future<void> _handleTestAlarmAndNotification() async {
-    final targetPrice = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? (_socketService.currentConfig.customPriceAlertTarget > 0 ? _socketService.currentConfig.customPriceAlertTarget : (_socketService.currentTick?.price ?? 3450.50));
-    await _socketService.triggerLocalTestAlert(level: 'CUSTOM', price: targetPrice);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: const Color(0xFF10B981),
-          content: Text('🚨 Custom Alert Test Fired @ \$${targetPrice.toStringAsFixed(2)}: Sound & Notification Dispatched!'),
-        ),
-      );
-    }
-  }
-
-  Future<void> _handleTestServerAlert() async {
-    final targetPrice = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? (_socketService.currentConfig.customPriceAlertTarget > 0 ? _socketService.currentConfig.customPriceAlertTarget : (_socketService.currentTick?.price ?? 3450.50));
-    final success = await _socketService.triggerRemoteTestAlert(level: 'CUSTOM', price: targetPrice);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-          content: Text(
-            success ? '🚨 Server Alert Triggered @ \$${targetPrice.toStringAsFixed(2)}! Dispatched to all devices.' : 'Failed to trigger server alert. Check connection.',
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-      );
-    }
-  }
-
-  Future<void> _handleTestFcmPush() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        backgroundColor: Color(0xFF3B82F6),
-        duration: Duration(seconds: 4),
-        content: Text('⏳ Dispatching FCM Cloud Push in 3 seconds... Close the app or lock phone NOW to test!'),
-      ),
-    );
-
-    await Future.delayed(const Duration(seconds: 3));
-    final success = await _notificationService.sendFcmTestPush(serverUrl: _serverUrlController.text.trim());
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-          content: Text(
-            success
-                ? '🔥 Firebase Push Dispatched! Alarm should ring on your phone.'
-                : 'Failed to dispatch FCM push. Check server URL or Firebase key.',
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-      );
     }
   }
 
@@ -374,13 +229,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final livePrice = _socketService.currentTick?.price ?? 3448.20;
-    final targetPrice = double.tryParse(_customTargetPriceController.text.replaceAll(',', '')) ?? _socketService.currentConfig.customPriceAlertTarget;
-    final distance = (livePrice - targetPrice).abs();
-    final customState = _socketService.levelStates['CUSTOM'] ?? 'INACTIVE';
-    final isTriggered = customState == 'TRIGGERED';
-    final isActive = _customPriceAlertEnabled && targetPrice > 0 && !isTriggered;
-
     return Scaffold(
       backgroundColor: const Color(0xFF070A12),
       appBar: AppBar(
@@ -423,38 +271,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _buildSectionHeader('👤 TRADER ACCOUNT & DEVICE PAIRING'),
           _buildUserProfileCard(),
 
-          const SizedBox(height: 12),
-
-          // 2. QUICK ALERT ENGINE TEST BANNER
-          _buildTestBanner(),
-
-          const SizedBox(height: 12),
-
-          // 3. CUSTOM PRICE ALERT CARD
-          _buildSectionHeader('🎯 CUSTOM PRICE ALERT'),
-          _buildCustomPriceAlertCard(livePrice, targetPrice, distance, isActive, isTriggered),
-
           const SizedBox(height: 14),
 
-          // 4. LOUD ALARM & SYSTEM PUSH NOTIFICATION SETTINGS
-          _buildSectionHeader('🔔 LOUD ALARM & NOTIFICATION SETTINGS'),
+          // 2. LOUD ALARM & SOUND SELECTION
+          _buildSectionHeader('🔔 LOUD ALARM SOUND SETTINGS'),
           _buildAudioAndNotificationCard(),
 
           const SizedBox(height: 14),
 
-          // 5. CHART SETTINGS CARD (Timeframe, Chart Range, Bar Spacing)
+          // 3. CHART SETTINGS CARD (Timeframe, Chart Range, Bar Spacing)
           _buildSectionHeader('📊 CHART SETTINGS'),
           _buildChartSettingsCard(),
 
-          const SizedBox(height: 14),
-
-          // 6. SERVER DIAGNOSTICS & PING TEST
-          _buildSectionHeader('🌐 BACKEND SERVER & DIAGNOSTICS'),
-          _buildServerDiagnosticsCard(),
-
           const SizedBox(height: 16),
 
-          // 6. BOTTOM SAVE BUTTON
+          // 4. BOTTOM SAVE BUTTON
           SizedBox(
             width: double.infinity,
             height: 48,
@@ -481,79 +312,253 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildTestBanner() {
+  Widget _buildAudioAndNotificationCard() {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            const Color(0xFFEF4444).withValues(alpha: 0.18),
-            const Color(0xFFF59E0B).withValues(alpha: 0.18),
-          ],
-        ),
+        color: const Color(0xFF0F172A),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
+        border: Border.all(color: const Color(0xFF1E293B)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(Icons.crisis_alert, color: Color(0xFFF59E0B), size: 22),
-              SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Test Alert & Notification Engine', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                    Text('Verify loud alarm sound, full-screen notification & vibration', style: TextStyle(color: Colors.white60, fontSize: 10)),
-                  ],
-                ),
+              const Row(
+                children: [
+                  Icon(Icons.volume_up_rounded, color: Color(0xFFF59E0B), size: 18),
+                  SizedBox(width: 6),
+                  Text('Select Price Alert Sound:', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                ],
               ),
+              if (_audioService.isPlaying)
+                InkWell(
+                  onTap: () async {
+                    await _audioService.stop();
+                    setState(() {});
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444).withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFFEF4444)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.stop_rounded, color: Colors.redAccent, size: 14),
+                        SizedBox(width: 3),
+                        Text('Stop Audio', style: TextStyle(color: Colors.redAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 10),
+
+          // 5 Distinct, Clean Sound Options
+          ...AlertSound.values.map((sound) {
+            final isSelected = _selectedSound == sound;
+            final isVibrate = sound == AlertSound.vibrateOnly;
+            final isDevice = sound == AlertSound.deviceSound;
+            final customFileName = _audioService.customAudioName;
+
+            return Container(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              decoration: BoxDecoration(
+                color: isSelected ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF070A12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isSelected ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
+                  width: isSelected ? 1.5 : 1,
+                ),
+              ),
+              child: Column(
+                children: [
+                  InkWell(
+                    onTap: () async {
+                      setState(() => _selectedSound = sound);
+                      await _audioService.setSound(sound);
+                      await _audioService.testSound(sound);
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                            color: isSelected ? const Color(0xFFF59E0B) : Colors.grey,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 10),
+                          Icon(
+                            isVibrate ? Icons.vibration : (isDevice ? Icons.folder_open_rounded : Icons.music_note_rounded),
+                            color: isSelected ? const Color(0xFFF59E0B) : Colors.white54,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  sound.title,
+                                  style: TextStyle(
+                                    color: isSelected ? Colors.white : Colors.white70,
+                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                    fontSize: 12.5,
+                                  ),
+                                ),
+                                if (isDevice && customFileName != null && customFileName.isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Selected: $customFileName',
+                                    style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 10.5, fontFamily: 'monospace'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              isVibrate ? Icons.touch_app : Icons.volume_up,
+                              color: const Color(0xFFF59E0B),
+                              size: 18,
+                            ),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            tooltip: 'Preview Sound',
+                            onPressed: () => _audioService.testSound(sound),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // If Device Sound selected, show Browse button
+                  if (isDevice) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(left: 40, right: 12, bottom: 10, top: 2),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.file_upload_outlined, size: 14, color: Color(0xFFF59E0B)),
+                              label: Text(
+                                customFileName != null && customFileName.isNotEmpty
+                                    ? 'Change Audio File'
+                                    : 'Browse Audio File from Device',
+                                style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: Color(0xFFF59E0B)),
+                                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              onPressed: () async {
+                                final picked = await _audioService.pickAndSetCustomAudio();
+                                if (picked && mounted) {
+                                  setState(() => _selectedSound = AlertSound.deviceSound);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      backgroundColor: const Color(0xFF10B981),
+                                      content: Text('✓ Custom audio loaded: ${_audioService.customAudioName}'),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            );
+          }),
+
+          const SizedBox(height: 12),
+          const Divider(color: Color(0xFF1E293B)),
+          const SizedBox(height: 8),
+
+          // Alarm Volume Slider
           Row(
             children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.volume_up, size: 13, color: Colors.white),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFEF4444),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: _handleTestAlarmAndNotification,
-                  label: const Text('LOCAL ALARM', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10)),
-                ),
-              ),
+              const Icon(Icons.volume_down, color: Colors.white60, size: 16),
               const SizedBox(width: 6),
+              const Text('Alarm Volume:', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
               Expanded(
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.cloud_upload, size: 13, color: Colors.black),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFF59E0B),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: _handleTestServerAlert,
-                  label: const Text('SERVER ALERT', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 10)),
+                child: Slider(
+                  value: _volume,
+                  min: 0.0,
+                  max: 1.0,
+                  divisions: 10,
+                  activeColor: const Color(0xFFF59E0B),
+                  inactiveColor: const Color(0xFF1E293B),
+                  onChanged: (v) async {
+                    setState(() => _volume = v);
+                    await _audioService.setVolume(v);
+                  },
                 ),
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.notifications_active, size: 13, color: Colors.white),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF3B82F6),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: _handleTestFcmPush,
-                  label: const Text('FCM PUSH', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10)),
-                ),
-              ),
+              Text('${(_volume * 100).toInt()}%', style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 12, fontFamily: 'monospace')),
             ],
+          ),
+
+          const SizedBox(height: 10),
+          const Divider(color: Color(0xFF1E293B)),
+          const SizedBox(height: 8),
+
+          // Ringtone Loop Duration
+          const Row(
+            children: [
+              Icon(Icons.repeat, color: Color(0xFFF59E0B), size: 16),
+              SizedBox(width: 6),
+              Text('Alarm Ringtone Loop Duration:', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: RingtoneLoopMode.values.map((mode) {
+              final isSel = _selectedLoopMode == mode;
+              return InkWell(
+                onTap: () async {
+                  setState(() => _selectedLoopMode = mode);
+                  await _audioService.setLoopMode(mode);
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF070A12),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
+                      width: isSel ? 1.5 : 1,
+                    ),
+                  ),
+                  child: Text(
+                    mode.label,
+                    style: TextStyle(
+                      color: isSel ? Colors.black : Colors.white70,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 10.5,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
           ),
         ],
       ),
@@ -747,612 +752,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildCustomPriceAlertCard(double livePrice, double targetPrice, double distance, bool isActive, bool isTriggered) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isTriggered ? const Color(0xFFEF4444) : (isActive ? const Color(0xFFF59E0B) : const Color(0xFF1E293B)),
-          width: isActive || isTriggered ? 1.5 : 1,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: isTriggered ? const Color(0xFFEF4444) : (isActive ? const Color(0xFF10B981) : Colors.grey),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    isTriggered ? '● TRIGGERED' : (isActive ? '● ACTIVE' : '● INACTIVE / PAUSED'),
-                    style: TextStyle(
-                      color: isTriggered ? const Color(0xFFEF4444) : (isActive ? const Color(0xFF10B981) : Colors.white60),
-                      fontWeight: FontWeight.w900,
-                      fontSize: 12,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-              Switch(
-                value: _customPriceAlertEnabled,
-                activeThumbColor: const Color(0xFFF59E0B),
-                activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.4),
-                inactiveThumbColor: Colors.grey[600],
-                inactiveTrackColor: const Color(0xFF1E293B),
-                onChanged: (val) {
-                  setState(() => _customPriceAlertEnabled = val);
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _customTargetPriceController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontWeight: FontWeight.w900, fontSize: 16),
-            decoration: InputDecoration(
-              labelText: 'Target Price (\$ USD)',
-              labelStyle: const TextStyle(color: Color(0xFFF59E0B), fontSize: 12),
-              prefixText: '\$ ',
-              prefixStyle: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold),
-              hintText: '3450.50',
-              hintStyle: const TextStyle(color: Colors.white24),
-              filled: true,
-              fillColor: const Color(0xFF070A12),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFF59E0B))),
-            ),
-            onChanged: (_) => setState(() {}),
-          ),
-          if (targetPrice > 0) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF070A12),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF1E293B)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Live Price: \$${livePrice.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white60, fontSize: 10)),
-                      const SizedBox(height: 2),
-                      Text(
-                        targetPrice > livePrice ? '↗ TARGET ABOVE (+\$${distance.toStringAsFixed(2)})' : '↘ TARGET BELOW (-\$${distance.toStringAsFixed(2)})',
-                        style: TextStyle(
-                          color: targetPrice > livePrice ? const Color(0xFF10B981) : const Color(0xFF60A5FA),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 10,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (isActive)
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.close, size: 12, color: Color(0xFFEF4444)),
-                      label: const Text('CANCEL ALERT', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold)),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Color(0xFFEF4444)),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                      ),
-                      onPressed: _handleCancelAlert,
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAudioAndNotificationCard() {
-    final currentNotifyMode = _soundEnabled && _vibrationEnabled
-        ? AlertNotifyMode.soundAndVibration
-        : (!_soundEnabled && _vibrationEnabled
-            ? AlertNotifyMode.vibrateOnly
-            : (_soundEnabled && !_vibrationEnabled
-                ? AlertNotifyMode.soundOnly
-                : AlertNotifyMode.silent));
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF1E293B)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            leading: const Icon(Icons.notifications_active, color: Color(0xFFF59E0B), size: 22),
-            title: const Text('System Push Notifications', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-            subtitle: const Text('Loud alarm notification banner on lock screen & notification shade', style: TextStyle(color: Colors.white60, fontSize: 10)),
-            trailing: TextButton(
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFF1E293B),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              ),
-              onPressed: () async {
-                final messenger = ScaffoldMessenger.of(context);
-                await _notificationService.requestPermissions();
-                await _notificationService.testNotification();
-                messenger.showSnackBar(
-                  const SnackBar(content: Text('Notification test dispatched!')),
-                );
-              },
-              child: const Text('Grant / Test', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
-            ),
-          ),
-          const Divider(color: Color(0xFF1E293B)),
-          const SizedBox(height: 6),
-          const Text('Alert Notification Mode:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
-          const SizedBox(height: 8),
-
-          // 4 Alert Notification Mode Choice Cards (including Vibration No Sound)
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            childAspectRatio: 2.3,
-            crossAxisSpacing: 8,
-            mainAxisSpacing: 8,
-            children: [
-              _buildNotifyModeTile(
-                mode: AlertNotifyMode.soundAndVibration,
-                title: '🔊 Sound + Vibrate',
-                subtitle: 'Loud alarm + vibration',
-                isSelected: currentNotifyMode == AlertNotifyMode.soundAndVibration,
-                onTap: () async {
-                  setState(() {
-                    _soundEnabled = true;
-                    _vibrationEnabled = true;
-                  });
-                  await _audioService.setNotifyMode(AlertNotifyMode.soundAndVibration);
-                },
-              ),
-              _buildNotifyModeTile(
-                mode: AlertNotifyMode.vibrateOnly,
-                title: '📳 Vibration (No Sound)',
-                subtitle: 'Tactile vibration only',
-                isSelected: currentNotifyMode == AlertNotifyMode.vibrateOnly,
-                onTap: () async {
-                  setState(() {
-                    _soundEnabled = false;
-                    _vibrationEnabled = true;
-                  });
-                  await _audioService.setNotifyMode(AlertNotifyMode.vibrateOnly);
-                },
-              ),
-              _buildNotifyModeTile(
-                mode: AlertNotifyMode.soundOnly,
-                title: '🔈 Sound Only',
-                subtitle: 'Loud ringtone, no vibrate',
-                isSelected: currentNotifyMode == AlertNotifyMode.soundOnly,
-                onTap: () async {
-                  setState(() {
-                    _soundEnabled = true;
-                    _vibrationEnabled = false;
-                  });
-                  await _audioService.setNotifyMode(AlertNotifyMode.soundOnly);
-                },
-              ),
-              _buildNotifyModeTile(
-                mode: AlertNotifyMode.silent,
-                title: '🔇 Silent Mode',
-                subtitle: 'Visual banner only',
-                isSelected: currentNotifyMode == AlertNotifyMode.silent,
-                onTap: () async {
-                  setState(() {
-                    _soundEnabled = false;
-                    _vibrationEnabled = false;
-                  });
-                  await _audioService.setNotifyMode(AlertNotifyMode.silent);
-                },
-              ),
-            ],
-          ),
-
-          if (currentNotifyMode == AlertNotifyMode.vibrateOnly) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF3B82F6).withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF3B82F6).withValues(alpha: 0.4)),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.vibration, color: Color(0xFF60A5FA), size: 16),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Vibration Only active: Alarm ringtones are muted; phone will pulse with tactile vibration on price touches.',
-                      style: TextStyle(color: Color(0xFF93C5FD), fontSize: 10.5, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 10),
-          const Divider(color: Color(0xFF1E293B)),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: const Text('Alarm Ringtone Sound', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-            subtitle: const Text('Play loud alarm audio when price touches target', style: TextStyle(color: Colors.white60, fontSize: 10)),
-            value: _soundEnabled,
-            activeThumbColor: const Color(0xFFF59E0B),
-            onChanged: (val) async {
-              setState(() => _soundEnabled = val);
-              await _audioService.setSoundEnabled(val);
-            },
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: const Text('Haptic Vibration', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-            subtitle: const Text('Tactile physical vibration when price touches target', style: TextStyle(color: Colors.white60, fontSize: 10)),
-            value: _vibrationEnabled,
-            activeThumbColor: const Color(0xFFF59E0B),
-            onChanged: (val) async {
-              setState(() => _vibrationEnabled = val);
-              await _audioService.setVibrationEnabled(val);
-            },
-          ),
-          const Divider(color: Color(0xFF1E293B)),
-          const SizedBox(height: 6),
-          const Text('Ringtone Loop Duration:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: RingtoneLoopMode.values.map((mode) {
-              final isSel = _selectedLoopMode == mode;
-              return InkWell(
-                onTap: () async {
-                  setState(() => _selectedLoopMode = mode);
-                  await _audioService.setLoopMode(mode);
-                },
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF070A12),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: isSel ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
-                      width: isSel ? 1.5 : 1,
-                    ),
-                  ),
-                  child: Text(
-                    mode.label,
-                    style: TextStyle(
-                      color: isSel ? Colors.black : Colors.white70,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 10,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 12),
-          const Divider(color: Color(0xFF1E293B)),
-          const SizedBox(height: 6),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('Choose Alarm Sound:', style: TextStyle(color: Color(0xFFFBBF24), fontWeight: FontWeight.bold, fontSize: 11)),
-              if (_audioService.isPlaying)
-                InkWell(
-                  onTap: () async {
-                    await _audioService.stop();
-                    setState(() {});
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEF4444).withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: const Color(0xFFEF4444)),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.stop, color: Colors.redAccent, size: 12),
-                        SizedBox(width: 2),
-                        Text('Stop Audio', style: TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          ...AlertSound.values.map((sound) {
-            final isSelected = _selectedSound == sound;
-            final isVibrate = sound == AlertSound.vibrateOnly;
-            final isDevice = sound == AlertSound.deviceSound;
-
-            return Container(
-              margin: const EdgeInsets.symmetric(vertical: 3),
-              decoration: BoxDecoration(
-                color: isSelected ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF070A12),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isSelected ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
-                  width: isSelected ? 1.5 : 1,
-                ),
-              ),
-              child: InkWell(
-                onTap: () async {
-                  setState(() => _selectedSound = sound);
-                  await _audioService.setSound(sound);
-                  await _audioService.testSound(sound);
-                },
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: Row(
-                    children: [
-                      Icon(
-                        isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                        color: isSelected ? const Color(0xFFF59E0B) : Colors.grey,
-                        size: 16,
-                      ),
-                      const SizedBox(width: 8),
-                      Icon(
-                        isVibrate ? Icons.vibration : (isDevice ? Icons.phonelink_ring : Icons.audiotrack),
-                        color: isSelected ? const Color(0xFFF59E0B) : Colors.white54,
-                        size: 16,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          sound.title,
-                          style: TextStyle(
-                            color: isSelected ? Colors.white : Colors.white70,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          isVibrate ? Icons.touch_app : Icons.volume_up,
-                          color: const Color(0xFFF59E0B),
-                          size: 16,
-                        ),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        onPressed: () => _audioService.testSound(sound),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Text('Volume:', style: TextStyle(color: Colors.white70, fontSize: 11)),
-              Expanded(
-                child: Slider(
-                  value: _volume,
-                  min: 0.0,
-                  max: 1.0,
-                  divisions: 10,
-                  activeColor: const Color(0xFFF59E0B),
-                  inactiveColor: const Color(0xFF1E293B),
-                  onChanged: (v) async {
-                    setState(() => _volume = v);
-                    await _audioService.setVolume(v);
-                  },
-                ),
-              ),
-              Text('${(_volume * 100).toInt()}%', style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 11)),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildServerDiagnosticsCard() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF1E293B)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            controller: _serverUrlController,
-            style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 12),
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: const Color(0xFF070A12),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B))),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFF59E0B))),
-              prefixIcon: const Icon(Icons.cloud_queue, color: Color(0xFFF59E0B), size: 18),
-            ),
-          ),
-          const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                ActionChip(
-                  backgroundColor: const Color(0xFF070A12),
-                  side: const BorderSide(color: Color(0xFF1E293B)),
-                  avatar: const Icon(Icons.cloud, color: Color(0xFFF59E0B), size: 14),
-                  label: const Text('Render Cloud', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                  onPressed: () {
-                    setState(() {
-                      _serverUrlController.text = 'https://gold-server-dbbq.onrender.com';
-                    });
-                  },
-                ),
-                const SizedBox(width: 6),
-                ActionChip(
-                  backgroundColor: const Color(0xFF070A12),
-                  side: const BorderSide(color: Color(0xFF1E293B)),
-                  avatar: const Icon(Icons.wifi, color: Color(0xFF10B981), size: 14),
-                  label: const Text('Local PC (192.168.1.48)', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                  onPressed: () {
-                    setState(() {
-                      _serverUrlController.text = 'http://192.168.1.48:5001';
-                    });
-                  },
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  icon: _isTestingPing
-                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF59E0B)))
-                      : const Icon(Icons.speed, color: Color(0xFFF59E0B), size: 16),
-                  label: const Text('Test Ping', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFF59E0B)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: _isTestingPing ? null : _handleTestPing,
-                ),
-              ),
-            ],
-          ),
-          if (_pingResult != null) ...[
-            const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: _pingResult!.contains('Connected')
-                    ? const Color(0xFF10B981).withValues(alpha: 0.15)
-                    : const Color(0xFFEF4444).withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: _pingResult!.contains('Connected') ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                ),
-              ),
-              child: Text(
-                _pingResult!,
-                style: TextStyle(
-                  color: _pingResult!.contains('Connected') ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                  fontSize: 11,
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNotifyModeTile({
-    required AlertNotifyMode mode,
-    required String title,
-    required String subtitle,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFF59E0B).withValues(alpha: 0.15) : const Color(0xFF070A12),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: isSelected ? const Color(0xFFF59E0B) : const Color(0xFF1E293B),
-            width: isSelected ? 1.5 : 1,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                  color: isSelected ? const Color(0xFFF59E0B) : Colors.white38,
-                  size: 14,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      color: isSelected ? Colors.white : Colors.white70,
-                      fontWeight: isSelected ? FontWeight.w900 : FontWeight.bold,
-                      fontSize: 11,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 2),
-            Padding(
-              padding: const EdgeInsets.only(left: 20),
-              child: Text(
-                subtitle,
-                style: TextStyle(
-                  color: isSelected ? const Color(0xFFFBBF24) : Colors.white38,
-                  fontSize: 9,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildSectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6, left: 4),
@@ -1368,5 +767,3 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
-
-
