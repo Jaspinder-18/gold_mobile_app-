@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -31,11 +30,11 @@ enum AlertNotifyMode {
 }
 
 enum AlertSound {
-  alarmClock('Alarm Clock (Loud Digital)', 'alarm_clock.wav'),
-  reminderBell('Reminder Bell (Melodic Chime)', 'reminder_bell.wav'),
-  radarAlert('Radar Alert (Tactical Ping)', 'radar_alert.wav'),
-  cyberSiren('Cyber Siren (Emergency Alarm)', 'cyber_siren.wav'),
-  customMedia('Custom Device Media / Sound', 'custom');
+  radarAlert('Sound 1: Urgent Radar Alarm', 'radar_alert.wav'),
+  alarmClock('Sound 2: Digital Alarm Clock', 'alarm_clock.wav'),
+  reminderBell('Sound 3: Melodic Chime Bell', 'reminder_bell.wav'),
+  vibrateOnly('Vibration Only (No Sound)', 'vibrate_only'),
+  deviceSound('Device Default / System Sound', 'device_default');
 
   final String title;
   final String fileName;
@@ -49,7 +48,7 @@ class AudioService {
   AudioService._internal();
 
   final AudioPlayer _player = AudioPlayer();
-  AlertSound _currentSound = AlertSound.alarmClock;
+  AlertSound _currentSound = AlertSound.radarAlert;
   RingtoneLoopMode _loopMode = RingtoneLoopMode.loop1Min;
   double _volume = 1.0;
   bool _soundEnabled = true;
@@ -70,8 +69,10 @@ class AudioService {
   String? get customAudioName => _customAudioName;
 
   AlertNotifyMode get notifyMode {
+    if (_currentSound == AlertSound.vibrateOnly || (!_soundEnabled && _vibrationEnabled)) {
+      return AlertNotifyMode.vibrateOnly;
+    }
     if (_soundEnabled && _vibrationEnabled) return AlertNotifyMode.soundAndVibration;
-    if (!_soundEnabled && _vibrationEnabled) return AlertNotifyMode.vibrateOnly;
     if (_soundEnabled && !_vibrationEnabled) return AlertNotifyMode.soundOnly;
     return AlertNotifyMode.silent;
   }
@@ -82,10 +83,10 @@ class AudioService {
       _customAudioPath = prefs.getString('custom_audio_path');
       _customAudioName = prefs.getString('custom_audio_name');
 
-      final soundName = prefs.getString('alert_sound') ?? AlertSound.alarmClock.name;
+      final soundName = prefs.getString('alert_sound') ?? AlertSound.radarAlert.name;
       _currentSound = AlertSound.values.firstWhere(
         (s) => s.name == soundName,
-        orElse: () => AlertSound.alarmClock,
+        orElse: () => AlertSound.radarAlert,
       );
 
       final loopModeName = prefs.getString('alert_loop_mode') ?? RingtoneLoopMode.loop1Min.name;
@@ -95,7 +96,7 @@ class AudioService {
       );
 
       _volume = prefs.getDouble('alert_volume') ?? 1.0;
-      _soundEnabled = prefs.getBool('alert_sound_enabled') ?? true;
+      _soundEnabled = prefs.getBool('alert_sound_enabled') ?? (_currentSound != AlertSound.vibrateOnly);
       _vibrationEnabled = prefs.getBool('alert_vibration_enabled') ?? true;
 
       // Configure AudioContext for loud speaker alarm usage
@@ -219,12 +220,12 @@ class AudioService {
         final name = result.files.single.name;
         _customAudioPath = path;
         _customAudioName = name;
-        _currentSound = AlertSound.customMedia;
+        _currentSound = AlertSound.deviceSound;
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('custom_audio_path', path);
         await prefs.setString('custom_audio_name', name);
-        await prefs.setString('alert_sound', AlertSound.customMedia.name);
+        await prefs.setString('alert_sound', AlertSound.deviceSound.name);
         return true;
       }
     } catch (e) {
@@ -267,17 +268,13 @@ class AudioService {
           }
         }
 
-        if (soundToPlay == AlertSound.customMedia) {
-          if (_customAudioPath != null && File(_customAudioPath!).existsSync()) {
-            try {
-              await _player.play(DeviceFileSource(_customAudioPath!));
-            } catch (e) {
-              debugPrint('[AudioService] DeviceFileSource playback failed: $e, falling back to asset...');
-              await _playAssetFile('alarm_clock.wav');
-            }
-          } else {
-            await _playAssetFile('alarm_clock.wav');
-          }
+        if (soundToPlay == AlertSound.vibrateOnly) {
+          // Vibration only mode: audio is muted
+        } else if (soundToPlay == AlertSound.deviceSound) {
+          try {
+            await SystemSound.play(SystemSoundType.alert);
+          } catch (_) {}
+          await _playAssetFile('reminder_bell.wav');
         } else {
           await _playAssetFile(soundToPlay.fileName);
         }
@@ -286,7 +283,7 @@ class AudioService {
       _isPlaying = true;
 
       // Start periodic vibration during alarm if enabled (even if sound is muted in Vibrate Only mode)
-      if (_vibrationEnabled || isManualTest) {
+      if (_vibrationEnabled || soundToPlay == AlertSound.vibrateOnly || isManualTest) {
         HapticFeedback.heavyImpact();
         if (!isManualTest && _loopMode != RingtoneLoopMode.playOnce) {
           _vibrationTimer = Timer.periodic(const Duration(seconds: 2), (_) {
@@ -336,6 +333,10 @@ class AudioService {
   }
 
   Future<void> testSound(AlertSound sound) async {
+    if (sound == AlertSound.vibrateOnly) {
+      HapticFeedback.heavyImpact();
+      return;
+    }
     await playAlertSound(soundOverride: sound, isManualTest: true);
   }
 
@@ -348,6 +349,10 @@ class AudioService {
       debugPrint('[AudioService] stop error: $e');
     }
     _isPlaying = false;
+  }
+
+  Future<void> stopAlarm() async {
+    await stop();
   }
 
   static Future<void> playAlertSoundDirect({String fileName = 'alarm_clock.wav', int loopSeconds = 30}) async {

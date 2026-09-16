@@ -313,7 +313,7 @@ class AlertEvent {
       levelPrice: targetPrice > 0 ? targetPrice : curPrice,
       currentPrice: curPrice > 0 ? curPrice : targetPrice,
       tolerance: _toDouble(json['tolerance'], 0.20),
-      screenshotPath: json['screenshotPath']?.toString() ?? '',
+      screenshotPath: (json['screenshotPath'] ?? json['screenshotUrl'] ?? json['imageUrl'] ?? json['image'] ?? '').toString(),
       triggerReason: json['triggerReason']?.toString() ?? '',
       telegramStatus: json['telegramStatus']?.toString() ?? 'SENT',
       timestamp: json['timestamp'] != null

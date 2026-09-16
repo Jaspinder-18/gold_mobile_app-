@@ -726,10 +726,41 @@ class NotificationService {
     }
   }
 
+  Future<Uint8List?> _downloadImageBytes(String? pathOrUrl) async {
+    if (pathOrUrl == null || pathOrUrl.isEmpty) return null;
+    try {
+      String fullUrl = pathOrUrl;
+      if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
+        final serverUrl = await _resolveServerUrl(null);
+        fullUrl = '${serverUrl.replaceAll(RegExp(r'/+$'), '')}${pathOrUrl.startsWith('/') ? '' : '/'}$pathOrUrl';
+      }
+      final response = await http.get(Uri.parse(fullUrl)).timeout(const Duration(seconds: 4));
+      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+        return response.bodyBytes;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> showAlertNotification(AlertEvent event) async {
     try {
       await _acquireWakeLock();
     } catch (_) {}
+
+    // 1. Strict Anti-Duplicate Debounce Window (25 seconds per symbol-price touch)
+    final debounceKey = '${event.symbol}_${event.levelPrice.toStringAsFixed(2)}';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_recentHandledAlerts.containsKey(debounceKey)) {
+      final lastTime = _recentHandledAlerts[debounceKey] ?? 0;
+      if ((now - lastTime) < 25000) {
+        debugPrint('[NotificationService] Deduplicating notification for: $debounceKey');
+        return;
+      }
+    }
+    _recentHandledAlerts[debounceKey] = now;
+
+    // Prune old debounce entries older than 60s
+    _recentHandledAlerts.removeWhere((_, time) => (now - time) > 60000);
 
     final symName =
         event.displayName.isNotEmpty ? event.displayName : (event.symbol.isNotEmpty ? event.symbol : 'ALERT');
@@ -755,6 +786,22 @@ class NotificationService {
     final isVibrationEnabled = AudioService.instance.vibrationEnabled;
     final isVibrateOnly = !isSoundEnabled && isVibrationEnabled;
     final activeChannelId = isVibrateOnly ? 'gold_price_alerts_vibrate_only' : channelId;
+
+    // Download screenshot image for rich BigPicture notification
+    final imageBytes = await _downloadImageBytes(event.screenshotPath);
+
+    final StyleInformation styleInformation = imageBytes != null
+        ? BigPictureStyleInformation(
+            ByteArrayAndroidBitmap(imageBytes),
+            contentTitle: title,
+            summaryText: body,
+            hideExpandedLargeIcon: true,
+          )
+        : BigTextStyleInformation(
+            body,
+            contentTitle: title,
+            summaryText: '$symName Alert Terminal',
+          );
 
     try {
       final androidDetails = AndroidNotificationDetails(
@@ -783,15 +830,10 @@ class NotificationService {
         audioAttributesUsage: AudioAttributesUsage.alarm,
         visibility: NotificationVisibility.public,
         ticker: '$symName Level Alert',
-        styleInformation: BigTextStyleInformation(
-          body,
-          contentTitle: title,
-          summaryText: '$symName Alert Terminal',
-        ),
+        styleInformation: styleInformation,
         actions: [
+          const AndroidNotificationAction('dismiss_alert', 'Cancel Alarm', showsUserInterface: false, cancelNotification: true),
           const AndroidNotificationAction('view_chart', 'View Chart', showsUserInterface: true),
-          const AndroidNotificationAction('dismiss_alert', 'Cancel',
-              showsUserInterface: false, cancelNotification: true),
         ],
       );
 
@@ -824,7 +866,7 @@ class NotificationService {
         details,
         payload: json.encode(payloadMap),
       );
-      debugPrint('[NotificationService] ✓ Primary notification delivered for $symName');
+      debugPrint('[NotificationService] ✓ Primary notification delivered for $symName with chart=${imageBytes != null}');
     } catch (e) {
       debugPrint('[NotificationService] Primary notification error: $e, using standard channel...');
       try {
@@ -838,14 +880,10 @@ class NotificationService {
           enableVibration: isVibrationEnabled,
           visibility: NotificationVisibility.public,
           timeoutAfter: 600000,
-          styleInformation: BigTextStyleInformation(
-            body,
-            contentTitle: title,
-            summaryText: '$symName Alert Terminal',
-          ),
+          styleInformation: styleInformation,
           actions: [
+            const AndroidNotificationAction('dismiss_alert', 'Cancel Alarm', showsUserInterface: false, cancelNotification: true),
             const AndroidNotificationAction('view_chart', 'View Chart', showsUserInterface: true),
-            const AndroidNotificationAction('dismiss_alert', 'Cancel', showsUserInterface: false, cancelNotification: true),
           ],
         );
         final payloadMap = {
@@ -890,5 +928,6 @@ class NotificationService {
 
 @pragma('vm:entry-point')
 void _bgNotificationTap(NotificationResponse response) {
-  debugPrint('[NotificationService] BG notification tap: ${response.payload}');
+  debugPrint('[NotificationService] BG notification tap action: ${response.actionId}');
+  AudioService.instance.stopAlarm();
 }

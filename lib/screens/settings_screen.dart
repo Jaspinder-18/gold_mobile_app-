@@ -1098,7 +1098,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 6),
           ...AlertSound.values.map((sound) {
             final isSelected = _selectedSound == sound;
-            final isCustom = sound == AlertSound.customMedia;
+            final isVibrate = sound == AlertSound.vibrateOnly;
+            final isDevice = sound == AlertSound.deviceSound;
 
             return Container(
               margin: const EdgeInsets.symmetric(vertical: 3),
@@ -1110,101 +1111,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   width: isSelected ? 1.5 : 1,
                 ),
               ),
-              child: Column(
-                children: [
-                  InkWell(
-                    onTap: () async {
-                      if (isCustom && _audioService.customAudioPath == null) {
-                        final picked = await _audioService.pickAndSetCustomAudio();
-                        if (picked && mounted) {
-                          setState(() => _selectedSound = AlertSound.customMedia);
-                          await _audioService.testSound(AlertSound.customMedia);
-                        }
-                      } else {
-                        setState(() => _selectedSound = sound);
-                        await _audioService.setSound(sound);
-                        await _audioService.testSound(sound);
-                      }
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      child: Row(
-                        children: [
-                          Icon(
-                            isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                            color: isSelected ? const Color(0xFFF59E0B) : Colors.grey,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 8),
-                          Icon(
-                            isCustom ? Icons.music_note : Icons.audiotrack,
-                            color: isSelected ? const Color(0xFFF59E0B) : Colors.white54,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  sound.title,
-                                  style: TextStyle(
-                                    color: isSelected ? Colors.white : Colors.white70,
-                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                if (isCustom && _audioService.customAudioName != null) ...[
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '📁 ${_audioService.customAudioName!}',
-                                    style: const TextStyle(
-                                      color: Color(0xFF10B981),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      fontFamily: 'monospace',
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                          if (isCustom)
-                            TextButton.icon(
-                              icon: const Icon(Icons.folder_open, size: 13, color: Color(0xFFF59E0B)),
-                              label: Text(
-                                _audioService.customAudioName != null ? 'Change' : 'Browse',
-                                style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 10, fontWeight: FontWeight.bold),
-                              ),
-                              style: TextButton.styleFrom(
-                                backgroundColor: const Color(0xFF1E293B),
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                minimumSize: Size.zero,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                              onPressed: () async {
-                                final picked = await _audioService.pickAndSetCustomAudio();
-                                if (picked && mounted) {
-                                  setState(() => _selectedSound = AlertSound.customMedia);
-                                  await _audioService.testSound(AlertSound.customMedia);
-                                }
-                              },
-                            )
-                          else
-                            IconButton(
-                              icon: const Icon(Icons.volume_up, color: Color(0xFFF59E0B), size: 16),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
-                              onPressed: () => _audioService.testSound(sound),
-                            ),
-                        ],
+              child: InkWell(
+                onTap: () async {
+                  setState(() => _selectedSound = sound);
+                  await _audioService.setSound(sound);
+                  await _audioService.testSound(sound);
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                        color: isSelected ? const Color(0xFFF59E0B) : Colors.grey,
+                        size: 16,
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      Icon(
+                        isVibrate ? Icons.vibration : (isDevice ? Icons.phonelink_ring : Icons.audiotrack),
+                        color: isSelected ? const Color(0xFFF59E0B) : Colors.white54,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          sound.title,
+                          style: TextStyle(
+                            color: isSelected ? Colors.white : Colors.white70,
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          isVibrate ? Icons.touch_app : Icons.volume_up,
+                          color: const Color(0xFFF59E0B),
+                          size: 16,
+                        ),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () => _audioService.testSound(sound),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             );
           }),

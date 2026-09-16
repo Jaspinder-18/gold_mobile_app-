@@ -513,7 +513,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ),
                 ),
 
-                const SizedBox(height: 22),
+                if (event.screenshotPath.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      height: 140,
+                      width: double.infinity,
+                      color: Colors.black26,
+                      child: event.screenshotPath.startsWith('http')
+                          ? Image.network(
+                              event.screenshotPath,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) => const Center(
+                                child: Icon(Icons.broken_image_rounded, color: Colors.white30, size: 28),
+                              ),
+                            )
+                          : Image.asset(
+                              event.screenshotPath,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) => const Center(
+                                child: Icon(Icons.show_chart_rounded, color: Colors.white30, size: 28),
+                              ),
+                            ),
+                    ),
+                  ),
+                ],
+
+                const SizedBox(height: 20),
 
                 // Action Buttons: Cancel and View Chart
                 Row(
@@ -522,17 +549,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: () {
-                          AudioService().stop();
+                          AudioService.instance.stopAlarm();
                           _isAlertDialogOpen = false;
                           Navigator.of(dialogCtx).pop();
                         },
-                        icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white70),
+                        icon: const Icon(Icons.volume_off_rounded, size: 18, color: Colors.white70),
                         label: const Text(
-                          'Cancel',
+                          'Cancel Alarm',
                           style: TextStyle(
                             color: Colors.white70,
                             fontWeight: FontWeight.bold,
-                            fontSize: 14,
+                            fontSize: 13,
                           ),
                         ),
                         style: OutlinedButton.styleFrom(
@@ -549,7 +576,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () {
-                          AudioService().stop();
+                          AudioService.instance.stopAlarm();
                           _isAlertDialogOpen = false;
                           Navigator.of(dialogCtx).pop();
                           _openLiveChart(event);
