@@ -56,21 +56,23 @@ class MarketTick {
   });
 
   factory MarketTick.fromJson(Map<String, dynamic> json) {
-    final p = _toDouble(json['price'], 4356.40);
+    final p = _toDouble(json['price'], 0.0);
     return MarketTick(
       symbol: json['symbol']?.toString() ?? json['rawSymbol']?.toString() ?? 'XAUUSD',
       displayName: json['displayName']?.toString() ?? json['symbol']?.toString() ?? 'Gold / USD',
       price: p,
-      bid: _toDouble(json['bid'], p - 0.25),
-      ask: _toDouble(json['ask'], p + 0.25),
-      high: _toDouble(json['high'] ?? json['high24h'], 4370.00),
-      low: _toDouble(json['low'] ?? json['low24h'], 4340.00),
-      open: _toDouble(json['open'], 4350.00),
+      bid: _toDouble(json['bid'], p > 0 ? p - 0.25 : 0.0),
+      ask: _toDouble(json['ask'], p > 0 ? p + 0.25 : 0.0),
+      high: _toDouble(json['high'] ?? json['high24h'], p),
+      low: _toDouble(json['low'] ?? json['low24h'], p),
+      open: _toDouble(json['open'], p),
       change: _toDouble(json['change'], 0.0),
       changePercent: _toDouble(json['changePercent'], 0.0),
       timestamp: json['timestamp'] != null
           ? DateTime.tryParse(json['timestamp'].toString()) ?? DateTime.now()
-          : DateTime.now(),
+          : (json['lastUpdated'] != null
+              ? DateTime.tryParse(json['lastUpdated'].toString()) ?? DateTime.now()
+              : DateTime.now()),
     );
   }
 }

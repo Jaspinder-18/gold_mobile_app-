@@ -19,12 +19,18 @@ class SocketService with WidgetsBindingObserver {
     _heartbeatTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
       _checkHealthAndSync();
     });
+
+    // Active Render Keep-Alive Heartbeat: pings /api/health every 45 seconds to keep backend awake
+    _renderKeepAliveTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+      _sendRenderKeepAlivePing();
+    });
   }
 
   io.Socket? _socket;
   String _serverUrl = 'https://gold-server-dbbq.onrender.com';
   bool _isConnected = false;
   Timer? _heartbeatTimer;
+  Timer? _renderKeepAliveTimer;
   bool _isPollingPrice = false;
 
   // Anti-duplicate alert debounce cache: debounceKey -> timestamp
@@ -152,9 +158,17 @@ class SocketService with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _sendRenderKeepAlivePing();
       _checkHealthAndSync();
       fetchInitialData();
     }
+  }
+
+  /// Active Keep-Alive HTTP Request to ensure Render free tier server stays alive
+  Future<void> _sendRenderKeepAlivePing() async {
+    try {
+      await http.get(Uri.parse('$_serverUrl/api/health')).timeout(const Duration(seconds: 12));
+    } catch (_) {}
   }
 
   void _checkHealthAndSync() {
@@ -171,7 +185,7 @@ class SocketService with WidgetsBindingObserver {
     if (_isPollingPrice) return;
     _isPollingPrice = true;
     try {
-      final res = await http.get(Uri.parse('$_serverUrl/api/market/ticker')).timeout(const Duration(seconds: 3));
+      final res = await http.get(Uri.parse('$_serverUrl/api/market/ticker')).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final body = json.decode(res.body);
         if (body['data'] != null) {
@@ -192,7 +206,7 @@ class SocketService with WidgetsBindingObserver {
   /// Background sync to ensure alerts are up-to-date
   Future<void> _syncLatestAlertsFromBackend() async {
     try {
-      final alertsRes = await http.get(Uri.parse('$_serverUrl/api/alerts?limit=6')).timeout(const Duration(seconds: 4));
+      final alertsRes = await http.get(Uri.parse('$_serverUrl/api/alerts?limit=6')).timeout(const Duration(seconds: 6));
       if (alertsRes.statusCode == 200) {
         final body = json.decode(alertsRes.body);
         if (body['data'] != null && body['data'] is List) {
@@ -210,6 +224,8 @@ class SocketService with WidgetsBindingObserver {
     _serverUrl = prefs.getString('server_url') ?? 'https://gold-server-dbbq.onrender.com';
 
     await NotificationService().initialize(serverUrl: _serverUrl);
+    // Send wake-up ping first
+    _sendRenderKeepAlivePing();
     await fetchInitialData();
     connectSocket();
   }
@@ -718,7 +734,7 @@ class SocketService with WidgetsBindingObserver {
   Future<void> fetchInitialData() async {
     try {
       // 1. Fetch Config
-      final configRes = await http.get(Uri.parse('$_serverUrl/api/config?symbol=$activeSymbol')).timeout(const Duration(seconds: 5));
+      final configRes = await http.get(Uri.parse('$_serverUrl/api/config?symbol=$activeSymbol')).timeout(const Duration(seconds: 12));
       if (configRes.statusCode == 200) {
         final body = json.decode(configRes.body);
         if (body['data'] != null) {
@@ -732,7 +748,7 @@ class SocketService with WidgetsBindingObserver {
       await fetchActiveAlerts();
 
       // 3. Fetch Latest 6 Alerts
-      final alertsRes = await http.get(Uri.parse('$_serverUrl/api/alerts?limit=6')).timeout(const Duration(seconds: 5));
+      final alertsRes = await http.get(Uri.parse('$_serverUrl/api/alerts?limit=6')).timeout(const Duration(seconds: 12));
       if (alertsRes.statusCode == 200) {
         final body = json.decode(alertsRes.body);
         if (body['data'] != null && body['data'] is List) {
@@ -742,18 +758,19 @@ class SocketService with WidgetsBindingObserver {
       }
 
       // 4. Fetch Ticker
-      final tickerRes = await http.get(Uri.parse('$_serverUrl/api/market/ticker')).timeout(const Duration(seconds: 5));
+      final tickerRes = await http.get(Uri.parse('$_serverUrl/api/market/ticker')).timeout(const Duration(seconds: 12));
       if (tickerRes.statusCode == 200) {
         final body = json.decode(tickerRes.body);
         if (body['data'] != null) {
           final tick = MarketTick.fromJson(Map<String, dynamic>.from(body['data']));
           if (tick.price > 0) {
             _dispatchMarketTick(tick);
+            _dispatchConnectionChange(true);
           }
         }
       }
     } catch (e) {
-      debugPrint('[SocketService] fetchInitialData error: $e');
+      debugPrint('[SocketService] fetchInitialData notice: $e');
     }
   }
 

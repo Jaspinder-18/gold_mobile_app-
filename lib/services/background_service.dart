@@ -84,13 +84,26 @@ class MarketAlertTaskHandler extends TaskHandler {
       http.Response? res;
       try {
         res = await http
-            .get(Uri.parse('$cleanUrl/api/market/latest?symbol=$_activeSymbol'))
-            .timeout(const Duration(seconds: 4));
+            .get(Uri.parse('$cleanUrl/api/market/ticker?symbol=$_activeSymbol'))
+            .timeout(const Duration(seconds: 8));
       } catch (_) {
         try {
           res = await http
-              .get(Uri.parse('https://gold-server-dbbq.onrender.com/api/market/latest?symbol=$_activeSymbol'))
-              .timeout(const Duration(seconds: 4));
+              .get(Uri.parse('$cleanUrl/api/market/latest?symbol=$_activeSymbol'))
+              .timeout(const Duration(seconds: 8));
+        } catch (_) {
+          try {
+            res = await http
+                .get(Uri.parse('https://gold-server-dbbq.onrender.com/api/market/ticker?symbol=$_activeSymbol'))
+                .timeout(const Duration(seconds: 8));
+          } catch (_) {}
+        }
+      }
+
+      // Background Keep-Alive Ping to /api/health every 60s
+      if (nowMs % 60000 < 5000) {
+        try {
+          http.get(Uri.parse('$cleanUrl/api/health')).timeout(const Duration(seconds: 5));
         } catch (_) {}
       }
 
