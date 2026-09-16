@@ -340,6 +340,8 @@ class AudioService {
     await playAlertSound(soundOverride: sound, isManualTest: true);
   }
 
+  static AudioPlayer? _activeBgPlayer;
+
   Future<void> stop() async {
     _stopTimer?.cancel();
     _vibrationTimer?.cancel();
@@ -348,16 +350,50 @@ class AudioService {
     } catch (e) {
       debugPrint('[AudioService] stop error: $e');
     }
+    try {
+      if (_activeBgPlayer != null) {
+        await _activeBgPlayer!.stop();
+        await _activeBgPlayer!.dispose();
+        _activeBgPlayer = null;
+      }
+    } catch (_) {}
     _isPlaying = false;
   }
 
   Future<void> stopAlarm() async {
-    await stop();
+    await stopAllAudio();
+  }
+
+  static Future<void> stopAllAudio() async {
+    try {
+      if (_activeBgPlayer != null) {
+        await _activeBgPlayer!.stop();
+        await _activeBgPlayer!.dispose();
+        _activeBgPlayer = null;
+      }
+    } catch (_) {}
+    try {
+      await _instance.stop();
+    } catch (_) {}
+    try {
+      HapticFeedback.lightImpact();
+    } catch (_) {}
   }
 
   static Future<void> playAlertSoundDirect({String fileName = 'alarm_clock.wav', int loopSeconds = 30}) async {
     try {
+      // Stop any existing background player first
+      try {
+        if (_activeBgPlayer != null) {
+          await _activeBgPlayer!.stop();
+          await _activeBgPlayer!.dispose();
+          _activeBgPlayer = null;
+        }
+      } catch (_) {}
+
       final AudioPlayer bgPlayer = AudioPlayer();
+      _activeBgPlayer = bgPlayer;
+
       try {
         await bgPlayer.setAudioContext(
           AudioContext(
@@ -408,11 +444,14 @@ class AudioService {
         } catch (_) {}
       }
 
-      if (playedOk) {
+      if (playedOk && loopSeconds > 0) {
         Timer(Duration(seconds: loopSeconds), () async {
           try {
-            await bgPlayer.stop();
-            await bgPlayer.dispose();
+            if (_activeBgPlayer == bgPlayer) {
+              await bgPlayer.stop();
+              await bgPlayer.dispose();
+              _activeBgPlayer = null;
+            }
           } catch (_) {}
         });
       }

@@ -17,8 +17,23 @@ import '../models/market_data.dart';
 import '../firebase_options.dart';
 import 'audio_service.dart';
 
+const int kAlertNotificationId = 1001;
+
 Future<void> _acquireWakeLock() async {
   // Keep empty to avoid popping over lock screen or hijacking keyguard
+}
+
+@pragma('vm:entry-point')
+void _bgNotificationTap(NotificationResponse response) async {
+  debugPrint('[NotificationService] BG notification tap action: ${response.actionId}');
+  try {
+    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    await flutterLocalNotificationsPlugin.cancel(kAlertNotificationId);
+    await flutterLocalNotificationsPlugin.cancelAll();
+  } catch (_) {}
+  try {
+    await AudioService.stopAllAudio();
+  } catch (_) {}
 }
 
 @pragma('vm:entry-point')
@@ -40,7 +55,19 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidSettings);
     try {
-      await flutterLocalNotificationsPlugin.initialize(initSettings);
+      await flutterLocalNotificationsPlugin.initialize(
+        initSettings,
+        onDidReceiveNotificationResponse: (NotificationResponse response) async {
+          try {
+            await flutterLocalNotificationsPlugin.cancel(kAlertNotificationId);
+            await flutterLocalNotificationsPlugin.cancelAll();
+          } catch (_) {}
+          try {
+            await AudioService.stopAllAudio();
+          } catch (_) {}
+        },
+        onDidReceiveBackgroundNotificationResponse: _bgNotificationTap,
+      );
     } catch (_) {}
 
     final androidImpl = flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
@@ -73,29 +100,57 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         await androidImpl.createNotificationChannel(alarmChannel);
         await androidImpl.createNotificationChannel(vibrateOnlyChannel);
       } catch (_) {}
-      try {
-        await androidImpl.requestNotificationsPermission();
-      } catch (_) {}
     }
 
     final data = message.data;
-    final symbol = data['symbol']?.toString() ?? 'XAUUSD';
+    final symbol = (data['symbol']?.toString() ?? 'XAUUSD').toUpperCase();
     final targetPrice = double.tryParse(data['targetPrice']?.toString() ?? '0') ?? 0.0;
-    final currentPrice = double.tryParse(
+    double currentPrice = double.tryParse(
         data['currentPrice']?.toString() ?? data['touchedPrice']?.toString() ?? '0') ?? targetPrice;
+    if (currentPrice <= 0 && targetPrice > 0) {
+      currentPrice = targetPrice;
+    }
+    if (currentPrice <= 0) {
+      debugPrint('[FCM Background] Ignoring message with zero price.');
+      return;
+    }
+
     final level = data['level']?.toString() ?? 'CUSTOM';
     final screenshotUrl = data['screenshotUrl']?.toString() ?? '';
 
     final isCustom = level.toUpperCase() == 'CUSTOM';
-    final title = message.notification?.title ?? (isCustom
-        ? '🚨 $symbol TOUCHED TARGET @ \$${currentPrice.toStringAsFixed(2)}'
-        : '🚨 $symbol TOUCHED $level @ \$${currentPrice.toStringAsFixed(2)}');
-    final body = message.notification?.body ?? (isCustom
+    final title = '🚨 $symbol TOUCHED TARGET @ \$${currentPrice.toStringAsFixed(2)}';
+    final body = isCustom
         ? 'Target: \$${targetPrice.toStringAsFixed(2)} · Price Alert Triggered · Tap to view chart'
-        : 'Target: \$${targetPrice.toStringAsFixed(2)} · Price Level Alert');
+        : '$symbol touched $level (\$${targetPrice.toStringAsFixed(2)}) · Tap to view live chart';
 
-    final notificationId =
-        (level.hashCode ^ symbol.hashCode ^ DateTime.now().millisecondsSinceEpoch).abs() % 2147483647;
+    // Download screenshot image if available
+    Uint8List? imageBytes;
+    if (screenshotUrl.isNotEmpty) {
+      try {
+        String fullUrl = screenshotUrl;
+        if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
+          fullUrl = 'https://gold-server-dbbq.onrender.com${screenshotUrl.startsWith('/') ? '' : '/'}$screenshotUrl';
+        }
+        final response = await http.get(Uri.parse(fullUrl)).timeout(const Duration(seconds: 4));
+        if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+          imageBytes = response.bodyBytes;
+        }
+      } catch (_) {}
+    }
+
+    final StyleInformation styleInformation = imageBytes != null
+        ? BigPictureStyleInformation(
+            ByteArrayAndroidBitmap(imageBytes),
+            contentTitle: title,
+            summaryText: body,
+            hideExpandedLargeIcon: true,
+          )
+        : BigTextStyleInformation(
+            body,
+            contentTitle: title,
+            summaryText: '$symbol Alert Terminal',
+          );
 
     final isVibrateOnly = !soundEnabled && vibrationEnabled;
     final activeChannelId = isVibrateOnly ? 'gold_price_alerts_vibrate_only' : 'gold_price_alerts_v5';
@@ -113,7 +168,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       autoCancel: true,
       showWhen: true,
       when: DateTime.now().millisecondsSinceEpoch,
-      timeoutAfter: 600000,
+      timeoutAfter: 300000,
       playSound: soundEnabled,
       sound: soundEnabled ? const RawResourceAndroidNotificationSound('alarm_clock') : null,
       enableVibration: vibrationEnabled,
@@ -126,14 +181,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       audioAttributesUsage: AudioAttributesUsage.alarm,
       visibility: NotificationVisibility.public,
       ticker: '$symbol Level Alert',
-      styleInformation: BigTextStyleInformation(
-        body,
-        contentTitle: title,
-        summaryText: '$symbol Alert Terminal',
-      ),
+      styleInformation: styleInformation,
       actions: [
-        const AndroidNotificationAction('view_chart', 'View Chart', showsUserInterface: true),
-        const AndroidNotificationAction('dismiss_alert', 'Cancel', showsUserInterface: false, cancelNotification: true),
+        const AndroidNotificationAction('view_chart', 'VIEW CHART', showsUserInterface: true),
+        const AndroidNotificationAction('dismiss_alert', 'CANCEL', showsUserInterface: false, cancelNotification: true),
       ],
     );
 
@@ -149,56 +200,14 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
     final details = NotificationDetails(android: androidDetails);
     await flutterLocalNotificationsPlugin.show(
-      notificationId,
+      kAlertNotificationId,
       title,
       body,
       details,
       payload: json.encode(payloadMap),
     );
-
-    if (soundEnabled) {
-      try {
-        await AudioService.playAlertSoundDirect();
-      } catch (_) {}
-    } else if (vibrationEnabled) {
-      try {
-        HapticFeedback.heavyImpact();
-      } catch (_) {}
-    }
   } catch (e) {
     debugPrint('[FCM Background] Error in background handler: $e');
-    try {
-      final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-      const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-      const initSettings = InitializationSettings(android: androidSettings);
-      try {
-        await flutterLocalNotificationsPlugin.initialize(initSettings);
-      } catch (_) {}
-      final fallbackAndroid = AndroidNotificationDetails(
-        'gold_price_alerts_v5',
-        '🚨 High Priority Price Level Alarms',
-        importance: Importance.max,
-        priority: Priority.max,
-        fullScreenIntent: false,
-        category: AndroidNotificationCategory.alarm,
-        audioAttributesUsage: AudioAttributesUsage.alarm,
-        visibility: NotificationVisibility.public,
-        actions: [
-          const AndroidNotificationAction('view_chart', 'View Chart', showsUserInterface: true),
-          const AndroidNotificationAction('dismiss_alert', 'Cancel', showsUserInterface: false, cancelNotification: true),
-        ],
-      );
-      final sym = message.data['symbol']?.toString() ?? 'XAUUSD';
-      final pr = message.data['currentPrice']?.toString() ??
-          message.data['touchedPrice']?.toString() ??
-          message.data['targetPrice']?.toString() ?? 'ALERT';
-      await flutterLocalNotificationsPlugin.show(
-        DateTime.now().millisecondsSinceEpoch.remainder(100000),
-        '🚨 $sym ALERT @ \$$pr',
-        'Price level alert triggered. Tap to open.',
-        NotificationDetails(android: fallbackAndroid),
-      );
-    } catch (_) {}
   }
 }
 
@@ -289,12 +298,18 @@ class NotificationService {
 
     await _notificationsPlugin.initialize(
       initSettings,
-      onDidReceiveNotificationResponse: (NotificationResponse response) {
+      onDidReceiveNotificationResponse: (NotificationResponse response) async {
+        try {
+          await _notificationsPlugin.cancel(kAlertNotificationId);
+          await _notificationsPlugin.cancelAll();
+        } catch (_) {}
+        try {
+          await AudioService.stopAllAudio();
+        } catch (_) {}
+
         if (response.actionId == 'dismiss_alert' || response.actionId == 'cancel') {
-          AudioService().stop();
           return;
         }
-        AudioService().stop();
         _handlePayload(response.payload);
       },
       onDidReceiveBackgroundNotificationResponse: _bgNotificationTap,
@@ -767,20 +782,24 @@ class NotificationService {
     final isCustom = event.level.toUpperCase() == 'CUSTOM';
     final isResistance = event.level.startsWith('R');
 
+    final double validCurrentPrice = event.currentPrice > 0 ? event.currentPrice : (event.levelPrice > 0 ? event.levelPrice : 0.0);
+    final double validTargetPrice = event.levelPrice > 0 ? event.levelPrice : validCurrentPrice;
+
+    if (validCurrentPrice <= 0 && validTargetPrice <= 0) {
+      debugPrint('[NotificationService] Skipping notification with invalid zero prices.');
+      return;
+    }
+
     final String title;
     final String body;
 
     if (isCustom) {
-      title = '🚨 $symName TOUCHED TARGET @ \$${event.currentPrice.toStringAsFixed(2)}';
-      body = 'Target: \$${event.levelPrice.toStringAsFixed(2)} · Price Alert Triggered · Tap to view live chart';
+      title = '🚨 $symName TOUCHED TARGET @ \$${validCurrentPrice.toStringAsFixed(2)}';
+      body = 'Target: \$${validTargetPrice.toStringAsFixed(2)} · Price Alert Triggered · Tap to view live chart';
     } else {
-      title = '🚨 $symName TOUCHED ${event.level} @ \$${event.currentPrice.toStringAsFixed(2)}';
-      body = 'Target: \$${event.levelPrice.toStringAsFixed(2)} · ${isResistance ? "Resistance" : "Support"} Level';
+      title = '🚨 $symName TOUCHED ${event.level} @ \$${validCurrentPrice.toStringAsFixed(2)}';
+      body = 'Target: \$${validTargetPrice.toStringAsFixed(2)} · ${isResistance ? "Resistance" : "Support"} Level';
     }
-
-    final notificationId =
-        (event.level.hashCode ^ event.symbol.hashCode ^ DateTime.now().millisecondsSinceEpoch).abs() %
-            2147483647;
 
     final isSoundEnabled = AudioService.instance.soundEnabled;
     final isVibrationEnabled = AudioService.instance.vibrationEnabled;
@@ -817,7 +836,7 @@ class NotificationService {
         autoCancel: true,
         showWhen: true,
         when: DateTime.now().millisecondsSinceEpoch,
-        timeoutAfter: 600000,
+        timeoutAfter: 300000,
         playSound: isSoundEnabled,
         sound: isSoundEnabled ? const RawResourceAndroidNotificationSound('alarm_clock') : null,
         enableVibration: isVibrationEnabled,
@@ -832,8 +851,8 @@ class NotificationService {
         ticker: '$symName Level Alert',
         styleInformation: styleInformation,
         actions: [
-          const AndroidNotificationAction('dismiss_alert', 'Cancel Alarm', showsUserInterface: false, cancelNotification: true),
-          const AndroidNotificationAction('view_chart', 'View Chart', showsUserInterface: true),
+          const AndroidNotificationAction('view_chart', 'VIEW CHART', showsUserInterface: true),
+          const AndroidNotificationAction('dismiss_alert', 'CANCEL', showsUserInterface: false, cancelNotification: true),
         ],
       );
 
@@ -846,8 +865,8 @@ class NotificationService {
 
       final payloadMap = {
         'symbol': event.symbol,
-        'currentPrice': event.currentPrice,
-        'targetPrice': event.levelPrice,
+        'currentPrice': validCurrentPrice,
+        'targetPrice': validTargetPrice,
         'level': event.level,
         'timestamp': event.timestamp.toIso8601String(),
         'screenshotUrl': event.screenshotPath,
@@ -860,7 +879,7 @@ class NotificationService {
       );
 
       await _notificationsPlugin.show(
-        notificationId,
+        kAlertNotificationId,
         title,
         body,
         details,
@@ -868,42 +887,7 @@ class NotificationService {
       );
       debugPrint('[NotificationService] ✓ Primary notification delivered for $symName with chart=${imageBytes != null}');
     } catch (e) {
-      debugPrint('[NotificationService] Primary notification error: $e, using standard channel...');
-      try {
-        final standardAndroid = AndroidNotificationDetails(
-          'gold_alerts_channel_standard',
-          '🔔 Market Price Touch Alerts',
-          importance: Importance.max,
-          priority: Priority.max,
-          fullScreenIntent: false,
-          playSound: isSoundEnabled,
-          enableVibration: isVibrationEnabled,
-          visibility: NotificationVisibility.public,
-          timeoutAfter: 600000,
-          styleInformation: styleInformation,
-          actions: [
-            const AndroidNotificationAction('dismiss_alert', 'Cancel Alarm', showsUserInterface: false, cancelNotification: true),
-            const AndroidNotificationAction('view_chart', 'View Chart', showsUserInterface: true),
-          ],
-        );
-        final payloadMap = {
-          'symbol': event.symbol,
-          'currentPrice': event.currentPrice,
-          'targetPrice': event.levelPrice,
-          'level': event.level,
-          'timestamp': event.timestamp.toIso8601String(),
-          'screenshotUrl': event.screenshotPath,
-          'alertId': event.id,
-        };
-        final fallbackDetails = NotificationDetails(android: standardAndroid);
-        await _notificationsPlugin.show(
-          notificationId,
-          title,
-          body,
-          fallbackDetails,
-          payload: json.encode(payloadMap),
-        );
-      } catch (_) {}
+      debugPrint('[NotificationService] Primary notification error: $e');
     }
   }
 
@@ -924,10 +908,4 @@ class NotificationService {
     );
     await showAlertNotification(testEvent);
   }
-}
-
-@pragma('vm:entry-point')
-void _bgNotificationTap(NotificationResponse response) {
-  debugPrint('[NotificationService] BG notification tap action: ${response.actionId}');
-  AudioService.instance.stopAlarm();
 }
