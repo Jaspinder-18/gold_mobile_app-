@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:photo_view/photo_view.dart';
-import 'package:intl/intl.dart';
 import '../models/market_data.dart';
 import '../services/socket_service.dart';
 import 'live_chart_screen.dart';
@@ -23,6 +22,11 @@ class _ScreenshotViewerScreenState extends State<ScreenshotViewerScreen> {
   void initState() {
     super.initState();
     _currentEvent = widget.event;
+    if (_currentEvent.screenshotPath.isEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _handleCaptureFreshChart();
+      });
+    }
   }
 
   Color _getLevelColor(String level) {
@@ -37,11 +41,9 @@ class _ScreenshotViewerScreenState extends State<ScreenshotViewerScreen> {
     if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
       return cleanPath;
     }
-    if (cleanPath.startsWith('/')) {
-      final baseUrl = SocketService().serverUrl.replaceAll(RegExp(r'/+$'), '');
-      return '$baseUrl$cleanPath';
-    }
-    return null;
+    final baseUrl = SocketService().serverUrl.replaceAll(RegExp(r'/+$'), '');
+    final cleanRelative = cleanPath.startsWith('/') ? cleanPath : '/$cleanPath';
+    return '$baseUrl$cleanRelative';
   }
 
   Future<void> _handleCaptureFreshChart() async {

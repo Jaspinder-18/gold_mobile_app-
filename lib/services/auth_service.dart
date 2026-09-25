@@ -254,4 +254,43 @@ class AuthService extends ChangeNotifier {
       }
     } catch (_) {}
   }
+
+  /// Toggle user notification preferences on server & locally
+  Future<bool> updateNotificationPreferences(bool enabled) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('notifications_enabled', enabled);
+
+      if (_currentUser != null) {
+        _currentUser = UserModel(
+          id: _currentUser!.id,
+          fullName: _currentUser!.fullName,
+          email: _currentUser!.email,
+          role: _currentUser!.role,
+          activeDevicesCount: _currentUser!.activeDevicesCount,
+          token: _currentUser!.token,
+          notificationsEnabled: enabled,
+        );
+        await _persistSession(_currentUser!, _currentUser!.token);
+        notifyListeners();
+
+        final serverUrl = await _resolveServerUrl();
+        final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+        final response = await http.post(
+          Uri.parse('$cleanUrl/api/auth/notifications'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({
+            'email': _currentUser!.email,
+            'enabled': enabled,
+          }),
+        ).timeout(const Duration(seconds: 5));
+
+        return response.statusCode >= 200 && response.statusCode < 300;
+      }
+      return true;
+    } catch (e) {
+      debugPrint('[AuthService] updateNotificationPreferences error: $e');
+      return false;
+    }
+  }
 }

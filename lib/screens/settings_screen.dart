@@ -4,6 +4,7 @@ import '../models/market_data.dart';
 import '../services/audio_service.dart';
 import '../services/socket_service.dart';
 import '../services/auth_service.dart';
+import '../services/notification_service.dart';
 import 'auth_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -27,6 +28,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late AppChartRange _selectedRange;
   late AppBarSpacing _selectedBarSpacing;
 
+  bool _notificationsEnabled = true;
   bool _isSaving = false;
 
   @override
@@ -45,7 +47,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _selectedTimeframe = AppTimeframe.fromString(cfg.chartTimeframe);
     _selectedRange = AppChartRange.fromString(cfg.chartRange);
     _selectedBarSpacing = AppBarSpacing.fromValue(cfg.barSpacing);
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _notificationsEnabled = prefs.getBool('notifications_enabled') ?? (AuthService().currentUser?.notificationsEnabled ?? true);
+    } catch (_) {}
+
     if (mounted) setState(() {});
+  }
+
+  Future<void> _handleToggleNotifications(bool enabled) async {
+    setState(() => _notificationsEnabled = enabled);
+    await NotificationService().setNotificationsEnabled(enabled);
+    await AuthService().updateNotificationPreferences(enabled);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: enabled ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+          duration: const Duration(seconds: 2),
+          content: Text(
+            enabled
+                ? '🔔 Push Notifications & Alarms: ON (Synced across all devices)'
+                : '🔕 Push Notifications & Alarms: OFF (Muted on this account)',
+            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+        ),
+      );
+    }
   }
 
   @override
@@ -57,10 +85,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _handleSaveAll() async {
     setState(() => _isSaving = true);
     try {
-      // 1. Save Audio Settings locally
+      // 1. Save Audio & Notification Settings locally and remotely
       await _audioService.setSound(_selectedSound);
       await _audioService.setLoopMode(_selectedLoopMode);
       await _audioService.setVolume(_volume);
+      await NotificationService().setNotificationsEnabled(_notificationsEnabled);
+      await AuthService().updateNotificationPreferences(_notificationsEnabled);
 
       // 2. Cache chart settings locally in SharedPreferences
       try {
@@ -201,7 +231,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const SizedBox(width: 5),
                     Text(
-                      'Account Active · Device Paired',
+                      'Multi-Device Sync Active · ${email.contains("@") ? email : "Paired"}',
                       style: TextStyle(color: Colors.greenAccent.shade400, fontSize: 10, fontWeight: FontWeight.w600),
                     ),
                   ],
@@ -323,6 +353,67 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Master Push Notifications & Alarms Switch (ON / OFF)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: _notificationsEnabled
+                  ? const Color(0xFF10B981).withValues(alpha: 0.12)
+                  : const Color(0xFFEF4444).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: _notificationsEnabled ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                width: 1.5,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _notificationsEnabled ? Icons.notifications_active_rounded : Icons.notifications_off_rounded,
+                  color: _notificationsEnabled ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                  size: 24,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _notificationsEnabled ? 'Push Notifications & Alarms: ON' : 'Push Notifications & Alarms: OFF',
+                        style: TextStyle(
+                          color: _notificationsEnabled ? Colors.white : const Color(0xFFFCA5A5),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _notificationsEnabled
+                            ? 'Alarms & screenshots are active across all devices logged into this email'
+                            : 'All price alarms and notifications are paused on this account',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.65),
+                          fontSize: 10.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: _notificationsEnabled,
+                  activeThumbColor: const Color(0xFF10B981),
+                  activeTrackColor: const Color(0xFF10B981).withValues(alpha: 0.4),
+                  inactiveThumbColor: const Color(0xFFEF4444),
+                  inactiveTrackColor: const Color(0xFFEF4444).withValues(alpha: 0.3),
+                  onChanged: (val) => _handleToggleNotifications(val),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          const Divider(color: Color(0xFF1E293B)),
+          const SizedBox(height: 10),
+
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [

@@ -5,6 +5,7 @@ class UserModel {
   final String role;
   final int activeDevicesCount;
   final String? token;
+  final bool notificationsEnabled;
 
   const UserModel({
     required this.id,
@@ -13,6 +14,7 @@ class UserModel {
     this.role = 'USER',
     this.activeDevicesCount = 1,
     this.token,
+    this.notificationsEnabled = true,
   });
 
   factory UserModel.fromJson(Map<String, dynamic> json, {String? sessionToken}) {
@@ -23,6 +25,7 @@ class UserModel {
       role: json['role']?.toString() ?? 'USER',
       activeDevicesCount: int.tryParse(json['activeDevicesCount']?.toString() ?? '1') ?? 1,
       token: sessionToken ?? json['token']?.toString(),
+      notificationsEnabled: json['notificationsEnabled'] != false,
     );
   }
 
@@ -34,6 +37,7 @@ class UserModel {
       'role': role,
       'activeDevicesCount': activeDevicesCount,
       'token': token,
+      'notificationsEnabled': notificationsEnabled,
     };
   }
 }

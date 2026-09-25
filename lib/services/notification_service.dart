@@ -16,6 +16,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../models/market_data.dart';
 import '../firebase_options.dart';
 import 'audio_service.dart';
+import 'auth_service.dart';
 
 const int kAlertNotificationId = 1001;
 
@@ -121,6 +122,19 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   try {
     final prefs = await SharedPreferences.getInstance();
+    final notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
+    if (!notificationsEnabled) {
+      debugPrint('[FCM Background] Notifications toggled OFF in settings. Skipping background push.');
+      return;
+    }
+
+    final alertUserEmail = (message.data['userEmail']?.toString() ?? '').trim().toLowerCase();
+    final localUserEmail = (prefs.getString('user_email') ?? '').trim().toLowerCase();
+    if (alertUserEmail.isNotEmpty && localUserEmail.isNotEmpty && alertUserEmail != localUserEmail) {
+      debugPrint('[FCM Background] Ignoring alert for $alertUserEmail (Device user: $localUserEmail)');
+      return;
+    }
+
     final soundName = prefs.getString('alert_sound') ?? 'radarAlert';
     final soundEnabled = prefs.getBool('alert_sound_enabled') ?? (soundName != 'vibrateOnly');
     final vibrationEnabled = prefs.getBool('alert_vibration_enabled') ?? true;
@@ -149,6 +163,18 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         AndroidFlutterLocalNotificationsPlugin>();
     if (androidImpl != null) {
       final channels = [
+        AndroidNotificationChannel(
+          'gold_price_alerts_v5',
+          '🚨 High Priority Price Level Alarms',
+          description: 'Loud alarm clock notifications for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('radar_alert'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
         AndroidNotificationChannel(
           'gold_channel_radar_v2',
           '🚨 Sound 1: Urgent Radar Alarm',
@@ -245,7 +271,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       try {
         String fullUrl = screenshotUrl;
         if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
-          fullUrl = 'https://gold-server-dbbq.onrender.com${screenshotUrl.startsWith('/') ? '' : '/'}$screenshotUrl';
+          final serverUrl = prefs.getString('server_url') ?? 'https://gold-server-dbbq.onrender.com';
+          fullUrl = '${serverUrl.replaceAll(RegExp(r'/+$'), '')}${screenshotUrl.startsWith('/') ? '' : '/'}$screenshotUrl';
         }
         final response = await http.get(Uri.parse(fullUrl)).timeout(const Duration(seconds: 4));
         if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
@@ -344,6 +371,17 @@ class NotificationService {
   static const String channelDescription =
       'Loud alarm clock notifications for market price touches';
 
+  bool _notificationsEnabled = true;
+  bool get notificationsEnabled => _notificationsEnabled;
+
+  Future<void> setNotificationsEnabled(bool enabled) async {
+    _notificationsEnabled = enabled;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('notifications_enabled', enabled);
+    } catch (_) {}
+  }
+
   bool get hasPermission => _hasPermission;
   String? get fcmToken => _fcmToken;
   String? get pendingPayload => _pendingPayload;
@@ -393,6 +431,11 @@ class NotificationService {
   Future<void> initialize({String? serverUrl}) async {
     if (_isInitialized) return;
 
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
+    } catch (_) {}
+
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const darwinSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
@@ -431,6 +474,18 @@ class NotificationService {
         AndroidFlutterLocalNotificationsPlugin>();
     if (androidImpl != null) {
       final channels = [
+        AndroidNotificationChannel(
+          'gold_price_alerts_v5',
+          '🚨 High Priority Price Level Alarms',
+          description: 'Loud alarm clock notifications for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('radar_alert'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
         AndroidNotificationChannel(
           'gold_channel_radar_v2',
           '🚨 Sound 1: Urgent Radar Alarm',
@@ -584,6 +639,18 @@ class NotificationService {
 
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
         debugPrint('[FCM] Foreground message received: ${message.data}');
+        if (!_notificationsEnabled) {
+          debugPrint('[NotificationService] Suppressing foreground alert: notifications are OFF.');
+          return;
+        }
+
+        final alertUserEmail = (message.data['userEmail']?.toString() ?? '').trim().toLowerCase();
+        final localUserEmail = (AuthService().currentUser?.email ?? '').trim().toLowerCase();
+        if (alertUserEmail.isNotEmpty && localUserEmail.isNotEmpty && alertUserEmail != localUserEmail) {
+          debugPrint('[NotificationService] Suppressing alert for $alertUserEmail (This user is $localUserEmail)');
+          return;
+        }
+
         final data = message.data;
         final alertId = data['alertId']?.toString() ?? message.messageId ?? '';
         final now = DateTime.now().millisecondsSinceEpoch;
@@ -619,6 +686,7 @@ class NotificationService {
           telegramStatus: 'SENT',
           timestamp: DateTime.now(),
           isTest: false,
+          userEmail: alertUserEmail.isNotEmpty ? alertUserEmail : null,
         );
 
         showAlertNotification(event);
@@ -629,16 +697,16 @@ class NotificationService {
 
       FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
         debugPrint('[FCM] Notification opened from background: ${message.data}');
-        final payload = message.data['screenshotUrl'] ?? message.data['alertId'];
-        _handlePayload(payload?.toString());
+        final payload = json.encode(message.data);
+        _handlePayload(payload);
       });
 
       try {
         final initialMsg = await messaging.getInitialMessage();
         if (initialMsg != null) {
           debugPrint('[FCM] Notification opened from terminated state: ${initialMsg.data}');
-          final payload = initialMsg.data['screenshotUrl'] ?? initialMsg.data['alertId'];
-          _handlePayload(payload?.toString());
+          final payload = json.encode(initialMsg.data);
+          _handlePayload(payload);
         }
       } catch (e) {
         debugPrint('[FCM] getInitialMessage error: $e');
@@ -652,20 +720,23 @@ class NotificationService {
     if (token.isEmpty) return;
     try {
       final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+      final userEmail = AuthService().currentUser?.email;
+      final payload = {
+        'token': token,
+        'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID',
+        'deviceName': 'Mobile Client',
+        'symbolSubscriptions': ['ALL'],
+        if (userEmail != null && userEmail.isNotEmpty) 'email': userEmail,
+      };
       final response = await http
           .post(
             Uri.parse('$cleanUrl/api/alerts/fcm/register'),
             headers: {'Content-Type': 'application/json'},
-            body: json.encode({
-              'token': token,
-              'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID',
-              'deviceName': 'Mobile Client',
-              'symbolSubscriptions': ['ALL']
-            }),
+            body: json.encode(payload),
           )
           .timeout(const Duration(seconds: 5));
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        debugPrint('[FCM] Token registered with backend: $cleanUrl');
+        debugPrint('[FCM] Token registered with backend: $cleanUrl (User: $userEmail)');
       } else {
         debugPrint('[FCM] Token registration response status: ${response.statusCode}');
       }
@@ -889,6 +960,11 @@ class NotificationService {
   }
 
   Future<void> showAlertNotification(AlertEvent event) async {
+    if (!_notificationsEnabled) {
+      debugPrint('[NotificationService] Suppressing alert: notifications are OFF in settings.');
+      return;
+    }
+
     try {
       await _acquireWakeLock();
     } catch (_) {}

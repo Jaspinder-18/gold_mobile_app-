@@ -149,13 +149,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           try {
             final map = json.decode(payload);
             sym = map['symbol']?.toString() ?? sym;
-            price = double.tryParse(map['currentPrice']?.toString() ?? '') ?? price;
+            price = double.tryParse(map['currentPrice']?.toString() ?? map['touchedPrice']?.toString() ?? '') ?? price;
             target = double.tryParse(map['targetPrice']?.toString() ?? '') ?? price;
             lvl = map['level']?.toString() ?? lvl;
             if (map['timestamp'] != null) {
               ts = DateTime.tryParse(map['timestamp'].toString()) ?? ts;
             }
-            sPath = map['screenshotUrl']?.toString() ?? '';
+            sPath = map['screenshotUrl']?.toString() ?? map['screenshotPath']?.toString() ?? '';
           } catch (_) {}
         }
         targetAlert = AlertEvent(
@@ -164,17 +164,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           displayName: '$sym Spot',
           level: lvl,
           levelPrice: target > 0 ? target : price,
-          currentPrice: price,
+          currentPrice: price > 0 ? price : target,
           tolerance: 0.20,
           screenshotPath: sPath,
-          triggerReason: 'Price level alert triggered',
+          triggerReason: 'Price alert triggered @ \$${price.toStringAsFixed(2)}',
           telegramStatus: 'SENT',
           timestamp: ts,
           isTest: false,
         );
       }
 
-      _openLiveChart(targetAlert);
+      _openScreenshotViewer(targetAlert);
     };
   }
 
@@ -643,10 +643,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _openScreenshotViewer(AlertEvent event) {
-    if (event.screenshotPath.isEmpty || (!event.screenshotPath.startsWith('http') && !event.screenshotPath.contains('.png'))) {
-      _openLiveChart(event);
-      return;
-    }
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => ScreenshotViewerScreen(event: event)),

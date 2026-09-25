@@ -305,6 +305,7 @@ class AlertEvent {
   final String telegramStatus;
   final DateTime timestamp;
   final bool isTest;
+  final String? userEmail;
 
   AlertEvent({
     required this.id,
@@ -319,6 +320,7 @@ class AlertEvent {
     required this.telegramStatus,
     required this.timestamp,
     this.isTest = false,
+    this.userEmail,
   });
 
   factory AlertEvent.fromJson(Map<String, dynamic> rawJson) {
@@ -349,6 +351,7 @@ class AlertEvent {
                   ? DateTime.tryParse(json['triggeredAt'].toString()) ?? DateTime.now()
                   : DateTime.now())),
       isTest: _toBool(json['isTest'], false),
+      userEmail: (json['userEmail'] ?? rawJson['userEmail'])?.toString(),
     );
   }
 }

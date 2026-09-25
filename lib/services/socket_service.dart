@@ -7,6 +7,7 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../models/market_data.dart';
 import 'audio_service.dart';
 import 'notification_service.dart';
+import 'auth_service.dart';
 
 class SocketService with WidgetsBindingObserver {
   static final SocketService _instance = SocketService._internal();
@@ -477,6 +478,15 @@ class SocketService with WidgetsBindingObserver {
           }
           _dispatchAlertsUpdate(recentAlerts);
 
+          // Check user email targeting:
+          // If the alert was set by a specific user email, only devices logged into that email trigger audio & push!
+          final alertEmail = (event.userEmail ?? '').trim().toLowerCase();
+          final myEmail = (AuthService().currentUser?.email ?? '').trim().toLowerCase();
+          if (alertEmail.isNotEmpty && myEmail.isNotEmpty && alertEmail != myEmail) {
+            debugPrint('[SocketService] Ignoring alert intended for $alertEmail (This device is logged in as $myEmail)');
+            return;
+          }
+
           // 4. Trigger UI dialog, audio alarm & push notification (strictly once per touch event)
           if (!isRecentDuplicate) {
             _recentAlertTimestamps[debounceKey] = now;
@@ -485,8 +495,12 @@ class SocketService with WidgetsBindingObserver {
 
             _dispatchAlertTriggered(event);
 
-            try { AudioService().playAlertSound(); } catch (_) {}
-            try { NotificationService().showAlertNotification(event); } catch (_) {}
+            if (NotificationService().notificationsEnabled) {
+              try { AudioService().playAlertSound(); } catch (_) {}
+              try { NotificationService().showAlertNotification(event); } catch (_) {}
+            } else {
+              debugPrint('[SocketService] Notification and audio skipped because notifications are toggled OFF.');
+            }
           }
         } catch (e, stack) {
           debugPrint('[SocketService] handleIncomingAlert error: $e\n$stack');
@@ -504,10 +518,15 @@ class SocketService with WidgetsBindingObserver {
     }
   }
 
-  /// Fetch all active alerts for current symbol
+  /// Fetch all active alerts for current symbol (optionally filtered by user's email)
   Future<void> fetchActiveAlerts() async {
     try {
-      final res = await http.get(Uri.parse('$_serverUrl/api/alerts/custom/list?symbol=$activeSymbol')).timeout(const Duration(seconds: 5));
+      final userEmail = AuthService().currentUser?.email;
+      String url = '$_serverUrl/api/alerts/custom/list?symbol=$activeSymbol';
+      if (userEmail != null && userEmail.isNotEmpty) {
+        url += '&userEmail=${Uri.encodeComponent(userEmail)}';
+      }
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
         final body = json.decode(res.body);
         if (body['data'] != null && body['data'] is List) {
@@ -522,13 +541,17 @@ class SocketService with WidgetsBindingObserver {
     }
   }
 
-  /// Create a new custom price alert
+  /// Create a new custom price alert tied to the user's email for cross-device alerts
   Future<bool> createCustomAlert({
     required double targetPrice,
     String condition = 'ANY',
     String note = '',
   }) async {
     try {
+      final user = AuthService().currentUser;
+      final userEmail = user?.email;
+      final userId = user?.id;
+
       final res = await http.post(
         Uri.parse('$_serverUrl/api/alerts/custom/create'),
         headers: {'Content-Type': 'application/json'},
@@ -538,6 +561,8 @@ class SocketService with WidgetsBindingObserver {
           'condition': condition,
           'note': note,
           'createdBy': 'APP',
+          if (userEmail != null && userEmail.isNotEmpty) 'userEmail': userEmail,
+          if (userId != null && userId.isNotEmpty) 'userId': userId,
         }),
       ).timeout(const Duration(seconds: 8));
 
