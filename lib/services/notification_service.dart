@@ -51,9 +51,9 @@ NotificationChannelConfig getChannelForSound(String? soundName, bool soundEnable
 
   if (soundName == 'radarAlert') {
     return const NotificationChannelConfig(
-      id: 'gold_channel_radar_v2',
-      name: '🚨 Sound 1: Urgent Radar Alarm',
-      description: 'Urgent radar alarm tone for market price touches',
+      id: 'gold_loud_alarm_channel_v7',
+      name: '🚨 Urgent Gold Price Touch Alarm',
+      description: 'Loud institutional radar alarm tone for market price touches',
       soundResource: 'radar_alert',
       playSound: true,
       enableVibration: true,
@@ -100,14 +100,16 @@ Future<void> _acquireWakeLock() async {
 @pragma('vm:entry-point')
 void _bgNotificationTap(NotificationResponse response) async {
   debugPrint('[NotificationService] BG notification tap action: ${response.actionId}');
-  try {
-    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-    await flutterLocalNotificationsPlugin.cancel(kAlertNotificationId);
-    await flutterLocalNotificationsPlugin.cancelAll();
-  } catch (_) {}
-  try {
-    await AudioService.stopAllAudio();
-  } catch (_) {}
+  if (response.actionId == 'dismiss_alert' || response.actionId == 'cancel') {
+    try {
+      final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+      await flutterLocalNotificationsPlugin.cancel(kAlertNotificationId);
+      await flutterLocalNotificationsPlugin.cancelAll();
+    } catch (_) {}
+    try {
+      await AudioService.stopAllAudio();
+    } catch (_) {}
+  }
 }
 
 @pragma('vm:entry-point')
@@ -116,6 +118,11 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+  } catch (_) {}
+
+  try {
+    await AudioService.instance.initialize();
+    await AudioService.instance.playAlertSound();
   } catch (_) {}
 
   debugPrint('[FCM Background] Remote message received: ${message.messageId}, data: ${message.data}');
@@ -470,10 +477,35 @@ class NotificationService {
       onDidReceiveBackgroundNotificationResponse: _bgNotificationTap,
     );
 
+    try {
+      final launchDetails = await _notificationsPlugin.getNotificationAppLaunchDetails();
+      if (launchDetails != null && launchDetails.didNotificationLaunchApp && launchDetails.notificationResponse != null) {
+        final payload = launchDetails.notificationResponse?.payload;
+        if (payload != null && payload.isNotEmpty) {
+          debugPrint('[NotificationService] App launched directly from notification tap: $payload');
+          _handlePayload(payload);
+        }
+      }
+    } catch (e) {
+      debugPrint('[NotificationService] getNotificationAppLaunchDetails error: $e');
+    }
+
     final androidImpl = _notificationsPlugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     if (androidImpl != null) {
       final channels = [
+        AndroidNotificationChannel(
+          'gold_loud_alarm_channel_v7',
+          '🚨 Urgent Gold Price Touch Alarm',
+          description: 'Loud institutional radar alarm tone for market price touches',
+          importance: Importance.max,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('radar_alert'),
+          enableVibration: true,
+          vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          enableLights: true,
+          showBadge: true,
+        ),
         AndroidNotificationChannel(
           'gold_price_alerts_v5',
           '🚨 High Priority Price Level Alarms',

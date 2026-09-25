@@ -9,6 +9,7 @@ import '../services/notification_service.dart';
 import 'live_chart_screen.dart';
 import 'screenshot_viewer_screen.dart';
 import 'settings_screen.dart';
+import 'devices_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -854,6 +855,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             symbol: _socketService.activeSymbol,
             isEmbedded: true,
           ),
+          DevicesScreen(
+            onBackToMonitor: () {
+              if (mounted) setState(() => _currentTabIndex = 0);
+            },
+          ),
           SettingsScreen(
             onBackToMonitor: () {
               if (mounted) setState(() => _currentTabIndex = 0);
@@ -880,6 +886,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined, size: 20), activeIcon: Icon(Icons.dashboard, size: 20), label: 'Monitor'),
             BottomNavigationBarItem(icon: Icon(Icons.photo_library_outlined, size: 20), activeIcon: Icon(Icons.photo_library, size: 20), label: 'Captures'),
             BottomNavigationBarItem(icon: Icon(Icons.candlestick_chart_rounded, size: 20), activeIcon: Icon(Icons.candlestick_chart, size: 20), label: 'Live'),
+            BottomNavigationBarItem(icon: Icon(Icons.devices_outlined, size: 20), activeIcon: Icon(Icons.devices, size: 20), label: 'Devices'),
             BottomNavigationBarItem(icon: Icon(Icons.settings_outlined, size: 20), activeIcon: Icon(Icons.settings, size: 20), label: 'Config'),
           ],
         ),
