@@ -1,33 +1,58 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import '../services/auth_service.dart';
-import '../services/notification_service.dart';
-import '../services/socket_service.dart';
 import 'auth_screen.dart';
 
 class DeviceItem {
-  final String token;
+  final String id;
+  final String deviceId;
   final String platform;
   final String deviceName;
-  final DateTime lastActiveAt;
+  final String browser;
+  final bool notificationsEnabled;
+  final bool isCurrentDevice;
+  final DateTime? lastActiveAt;
 
   DeviceItem({
-    required this.token,
+    required this.id,
+    required this.deviceId,
     required this.platform,
     required this.deviceName,
-    required this.lastActiveAt,
+    required this.browser,
+    required this.notificationsEnabled,
+    required this.isCurrentDevice,
+    this.lastActiveAt,
   });
 
-  factory DeviceItem.fromJson(Map<String, dynamic> json) {
+  factory DeviceItem.fromMap(Map<String, dynamic> map) {
+    DateTime? parsedDate;
+    if (map['lastActiveAt'] != null) {
+      parsedDate = DateTime.tryParse(map['lastActiveAt'].toString());
+    }
     return DeviceItem(
-      token: json['token']?.toString() ?? '',
-      platform: json['platform']?.toString().toUpperCase() ?? 'ANDROID',
-      deviceName: json['deviceName']?.toString() ?? 'Mobile Device',
-      lastActiveAt: json['lastActiveAt'] != null 
-          ? DateTime.tryParse(json['lastActiveAt'].toString()) ?? DateTime.now() 
-          : DateTime.now(),
+      id: map['id']?.toString() ?? map['_id']?.toString() ?? '',
+      deviceId: map['deviceId']?.toString() ?? '',
+      platform: (map['platform']?.toString() ?? 'ANDROID').toUpperCase(),
+      deviceName: map['deviceName']?.toString() ?? 'Mobile Device',
+      browser: map['browser']?.toString() ?? '',
+      notificationsEnabled: map['notificationsEnabled'] ?? true,
+      isCurrentDevice: map['isCurrentDevice'] == true,
+      lastActiveAt: parsedDate,
+    );
+  }
+
+  DeviceItem copyWith({
+    bool? notificationsEnabled,
+  }) {
+    return DeviceItem(
+      id: id,
+      deviceId: deviceId,
+      platform: platform,
+      deviceName: deviceName,
+      browser: browser,
+      notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+      isCurrentDevice: isCurrentDevice,
+      lastActiveAt: lastActiveAt,
     );
   }
 }
@@ -45,7 +70,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
   List<DeviceItem> _devices = [];
   bool _isLoading = false;
   String? _errorMessage;
-  String? _deletingToken;
+  String? _testingDeviceId;
+  String? _deletingDeviceId;
 
   @override
   void initState() {
@@ -53,15 +79,20 @@ class _DevicesScreenState extends State<DevicesScreen> {
     _fetchDevices();
   }
 
-  Future<String> _resolveServerUrl() async {
-    final socketUrl = SocketService().serverUrl;
-    if (socketUrl.isNotEmpty) return socketUrl;
-    return 'https://gold-server-dbbq.onrender.com';
+  String _formatRelativeTime(DateTime? date) {
+    if (date == null) return 'Never';
+    final now = DateTime.now();
+    final diff = now.difference(date);
+    if (diff.inSeconds < 45) return 'Active just now';
+    if (diff.inMinutes < 60) return 'Active ${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return 'Active ${diff.inHours}h ago';
+    if (diff.inDays < 7) return 'Active ${diff.inDays}d ago';
+    return 'Active ${DateFormat('MMM d, h:mm a').format(date.toLocal())}';
   }
 
   Future<void> _fetchDevices() async {
     final user = AuthService().currentUser;
-    if (user == null || user.email.isEmpty) {
+    if (user == null) {
       if (mounted) setState(() => _isLoading = false);
       return;
     }
@@ -72,48 +103,101 @@ class _DevicesScreenState extends State<DevicesScreen> {
     });
 
     try {
-      final serverUrl = await _resolveServerUrl();
-      final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-      final response = await http.get(
-        Uri.parse('$cleanUrl/api/auth/devices?email=${Uri.encodeComponent(user.email)}'),
-        headers: {'Content-Type': 'application/json'},
-      ).timeout(const Duration(seconds: 10));
-
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final body = json.decode(response.body);
-        if (body['success'] == true && body['data'] is List) {
-          final list = (body['data'] as List)
-              .map((d) => DeviceItem.fromJson(d))
-              .toList();
-          if (mounted) {
-            setState(() {
-              _devices = list;
-              _isLoading = false;
-            });
-          }
-          return;
-        }
-      }
+      final list = await AuthService().getConnectedDevices();
       if (mounted) {
         setState(() {
-          _errorMessage = 'Failed to load devices. Please try again.';
+          _devices = list.map((m) => DeviceItem.fromMap(m)).toList();
           _isLoading = false;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = 'Network error loading devices.';
+          _errorMessage = 'Failed to load connected devices. Please check connection.';
           _isLoading = false;
         });
       }
     }
   }
 
-  Future<void> _removeDevice(DeviceItem device) async {
-    final user = AuthService().currentUser;
-    if (user == null) return;
+  Future<void> _toggleDeviceNotification(DeviceItem device, bool value) async {
+    // Optimistic UI update
+    setState(() {
+      final idx = _devices.indexWhere((d) => d.deviceId == device.deviceId);
+      if (idx != -1) {
+        _devices[idx] = _devices[idx].copyWith(notificationsEnabled: value);
+      }
+    });
 
+    final success = await AuthService().updateDeviceNotifications(device.deviceId, value);
+    if (!success && mounted) {
+      // Revert if failed
+      setState(() {
+        final idx = _devices.indexWhere((d) => d.deviceId == device.deviceId);
+        if (idx != -1) {
+          _devices[idx] = _devices[idx].copyWith(notificationsEnabled: !value);
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFFEF4444),
+          content: Text('Failed to update device notification preferences.'),
+        ),
+      );
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: value ? const Color(0xFF10B981) : const Color(0xFF64748B),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          content: Row(
+            children: [
+              Icon(value ? Icons.notifications_active : Icons.notifications_off, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                '${device.deviceName}: Notifications ${value ? "ENABLED" : "MUTED"}',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _sendTestPush(DeviceItem device) async {
+    setState(() => _testingDeviceId = device.deviceId);
+
+    final ok = await AuthService().sendDeviceTestPush(device.deviceId);
+
+    if (mounted) {
+      setState(() => _testingDeviceId = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: ok ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          content: Row(
+            children: [
+              Icon(ok ? Icons.check_circle : Icons.error_outline, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  ok
+                      ? 'Test push sent to ${device.deviceName}!'
+                      : 'Failed to send test push to ${device.deviceName}.',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _removeDevice(DeviceItem device) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -130,7 +214,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
           ],
         ),
         content: Text(
-          'Are you sure you want to remove "${device.deviceName}" from this account?\n\nThis device will no longer receive price touch push alarms.',
+          'Are you sure you want to remove "${device.deviceName}" from your account?\n\n'
+          '${device.isCurrentDevice ? "⚠️ This is your CURRENT device. You will be logged out immediately." : "This device will be disconnected and will no longer receive price alerts."}',
           style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
         ),
         actions: [
@@ -152,79 +237,48 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
     if (confirmed != true) return;
 
-    setState(() => _deletingToken = device.token);
+    setState(() => _deletingDeviceId = device.deviceId);
 
-    try {
-      final serverUrl = await _resolveServerUrl();
-      final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-      final response = await http.post(
-        Uri.parse('$cleanUrl/api/auth/devices/remove'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'email': user.email,
-          'token': device.token,
-        }),
-      ).timeout(const Duration(seconds: 10));
+    final ok = await AuthService().removeDevice(device.deviceId);
 
-      final body = json.decode(response.body);
-      if (response.statusCode >= 200 && response.statusCode < 300 && body['success'] == true) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: const Color(0xFF10B981),
-              behavior: SnackBarBehavior.floating,
-              content: Row(
-                children: [
-                  const Icon(Icons.check_circle, color: Colors.white, size: 20),
-                  const SizedBox(width: 8),
-                  Text('Device "${device.deviceName}" unlinked.', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                ],
-              ),
-            ),
-          );
+    if (mounted) {
+      setState(() => _deletingDeviceId = null);
+      if (ok) {
+        if (device.isCurrentDevice) {
+          await AuthService().logout();
+          if (mounted) {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (_) => const AuthScreen()),
+              (route) => false,
+            );
+          }
+          return;
         }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF10B981),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white, size: 18),
+                const SizedBox(width: 8),
+                Text('Device "${device.deviceName}" removed.', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        );
         await _fetchDevices();
       } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: const Color(0xFFEF4444),
-              content: Text(body['error'] ?? 'Failed to remove device.'),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             backgroundColor: Color(0xFFEF4444),
-            content: Text('Network error unlinking device.'),
+            content: Text('Failed to remove device. Please try again.'),
           ),
         );
       }
-    } finally {
-      if (mounted) setState(() => _deletingToken = null);
     }
-  }
-
-  void _copyToClipboard(String text, String label) {
-    Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: const Color(0xFF1E293B),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        content: Row(
-          children: [
-            const Icon(Icons.copy, color: Color(0xFFF59E0B), size: 18),
-            const SizedBox(width: 8),
-            Expanded(child: Text('$label copied to clipboard!', style: const TextStyle(color: Colors.white, fontSize: 12))),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
@@ -241,19 +295,19 @@ class _DevicesScreenState extends State<DevicesScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF59E0B).withOpacity(0.15),
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(Icons.devices_other, color: Color(0xFFF59E0B), size: 40),
               ),
               const SizedBox(height: 16),
               const Text(
-                'Account Required',
+                'Authentication Required',
                 style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
               const Text(
-                'Please sign in with your email to inspect, manage, and unlink devices sharing your price touch alerts.',
+                'Please sign in to inspect, manage, and unlink devices sharing your price touch alerts.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white60, fontSize: 13, height: 1.4),
               ),
@@ -276,8 +330,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
       );
     }
 
-    final localFcmToken = NotificationService().fcmToken ?? '';
-
     return RefreshIndicator(
       color: const Color(0xFFF59E0B),
       backgroundColor: const Color(0xFF0F172A),
@@ -285,7 +337,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
       child: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         children: [
-          // Header Summary Card
+          // Header Card
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -295,10 +347,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.3)),
+              border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.3)),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black.withValues(alpha: 0.3),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
@@ -315,7 +367,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         Icon(Icons.hub_rounded, color: Color(0xFFF59E0B), size: 20),
                         SizedBox(width: 8),
                         Text(
-                          'DEVICE & FCM TOKEN REGISTRY',
+                          'CONNECTED DEVICES & TERMINALS',
                           style: TextStyle(
                             color: Color(0xFFF59E0B),
                             fontSize: 11,
@@ -347,9 +399,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF10B981).withOpacity(0.15),
+                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFF10B981).withOpacity(0.3)),
+                    border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.3)),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -379,7 +431,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: const [
               Text(
-                'LINKED FCM PUSH DEVICES',
+                'YOUR ACTIVE DEVICES',
                 style: TextStyle(
                   color: Colors.white54,
                   fontSize: 11,
@@ -407,9 +459,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
               padding: const EdgeInsets.all(16),
               margin: const EdgeInsets.symmetric(vertical: 10),
               decoration: BoxDecoration(
-                color: const Color(0xFFEF4444).withOpacity(0.1),
+                color: const Color(0xFFEF4444).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.3)),
+                border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.3)),
               ),
               child: Column(
                 children: [
@@ -434,7 +486,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
               ),
               child: const Center(
                 child: Text(
-                  'No registered devices found for this account.\nSign into your devices to link them.',
+                  'No connected devices found for this account.\nSign into your devices to link them.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.4),
                 ),
@@ -442,8 +494,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
             )
           else
             ..._devices.map((dev) {
-              final isThisDevice = localFcmToken.isNotEmpty && dev.token == localFcmToken;
-              final isDeleting = _deletingToken == dev.token;
+              final isDeleting = _deletingDeviceId == dev.deviceId;
+              final isTesting = _testingDeviceId == dev.deviceId;
 
               IconData platformIcon = Icons.smartphone;
               Color platformColor = const Color(0xFF10B981);
@@ -462,26 +514,29 @@ class _DevicesScreenState extends State<DevicesScreen> {
                   color: const Color(0xFF0E1626),
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                    color: isThisDevice ? const Color(0xFFF59E0B).withOpacity(0.5) : const Color(0xFF1E293B),
-                    width: isThisDevice ? 1.5 : 1,
+                    color: dev.isCurrentDevice
+                        ? const Color(0xFFF59E0B).withValues(alpha: 0.5)
+                        : const Color(0xFF1E293B),
+                    width: dev.isCurrentDevice ? 1.5 : 1,
                   ),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Top row: Device Info + Delete Action
+                    // Top row: Device Info + Platform Badge
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Container(
-                          padding: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: platformColor.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: platformColor.withOpacity(0.3)),
+                            color: platformColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: platformColor.withValues(alpha: 0.3)),
                           ),
-                          child: Icon(platformIcon, color: platformColor, size: 18),
+                          child: Icon(platformIcon, color: platformColor, size: 20),
                         ),
-                        const SizedBox(width: 10),
+                        const SizedBox(width: 12),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -499,14 +554,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
                                       overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
-                                  if (isThisDevice) ...[
-                                    const SizedBox(width: 6),
+                                  if (dev.isCurrentDevice) ...[
+                                    const SizedBox(width: 8),
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFFF59E0B).withOpacity(0.2),
+                                        color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
                                         borderRadius: BorderRadius.circular(6),
-                                        border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.4)),
+                                        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
                                       ),
                                       child: const Text(
                                         'THIS DEVICE',
@@ -521,10 +576,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
                                   ],
                                 ],
                               ),
-                              const SizedBox(height: 2),
+                              const SizedBox(height: 3),
                               Text(
-                                '${dev.platform} · Active: ${dev.lastActiveAt.toLocal().toString().split('.')[0]}',
-                                style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace'),
+                                '${dev.platform}${dev.browser.isNotEmpty ? " · ${dev.browser}" : ""} · ${_formatRelativeTime(dev.lastActiveAt)}',
+                                style: const TextStyle(color: Colors.white38, fontSize: 11, fontFamily: 'monospace'),
                               ),
                             ],
                           ),
@@ -544,55 +599,72 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       ],
                     ),
 
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 12),
 
-                    // FCM Token Box
+                    // Bottom row: Push Notification Controls & Test Push Button
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
                         color: const Color(0xFF030712),
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: const Color(0xFF1E293B)),
                       ),
                       child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Icon(Icons.key, color: Colors.white38, size: 14),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              dev.token.length > 28
-                                  ? '${dev.token.substring(0, 14)}...${dev.token.substring(dev.token.length - 12)}'
-                                  : dev.token,
-                              style: const TextStyle(
-                                color: Color(0xFF38BDF8),
-                                fontSize: 11,
-                                fontFamily: 'monospace',
+                          Row(
+                            children: [
+                              Icon(
+                                dev.notificationsEnabled ? Icons.notifications_active : Icons.notifications_off,
+                                color: dev.notificationsEnabled ? const Color(0xFFF59E0B) : Colors.white38,
+                                size: 16,
                               ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                              const SizedBox(width: 8),
+                              Text(
+                                dev.notificationsEnabled ? 'Alerts Enabled' : 'Alerts Muted',
+                                style: TextStyle(
+                                  color: dev.notificationsEnabled ? Colors.white : Colors.white38,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Switch(
+                                value: dev.notificationsEnabled,
+                                activeThumbColor: const Color(0xFFF59E0B),
+                                activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.3),
+                                inactiveThumbColor: Colors.white38,
+                                inactiveTrackColor: const Color(0xFF1E293B),
+                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                onChanged: (val) => _toggleDeviceNotification(dev, val),
+                              ),
+                            ],
                           ),
-                          InkWell(
-                            onTap: () => _copyToClipboard(dev.token, 'FCM Token'),
-                            borderRadius: BorderRadius.circular(6),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              child: Row(
-                                children: const [
-                                  Icon(Icons.copy, color: Color(0xFFF59E0B), size: 12),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    'COPY',
+                          // Test Push Action
+                          isTesting
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF59E0B)),
+                                )
+                              : TextButton.icon(
+                                  onPressed: () => _sendTestPush(dev),
+                                  icon: const Icon(Icons.send_rounded, size: 12, color: Color(0xFF38BDF8)),
+                                  label: const Text(
+                                    'TEST',
                                     style: TextStyle(
-                                      color: Color(0xFFF59E0B),
+                                      color: Color(0xFF38BDF8),
                                       fontSize: 10,
                                       fontWeight: FontWeight.bold,
                                       fontFamily: 'monospace',
                                     ),
                                   ),
-                                ],
-                              ),
-                            ),
-                          ),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ),
                         ],
                       ),
                     ),

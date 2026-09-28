@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import '../models/user_model.dart';
 import 'notification_service.dart';
 
@@ -18,9 +19,11 @@ class AuthService extends ChangeNotifier {
   UserModel? get currentUser => _currentUser;
   bool get isLoggedIn => _currentUser != null;
   bool get isInitialized => _isInitialized;
+  String? get sessionToken => _currentUser?.sessionToken;
 
   static const String _prefUserKey = 'auth_user_profile_json';
   static const String _prefTokenKey = 'auth_session_token';
+  static const String _prefDeviceIdKey = 'gold_mobile_device_id';
 
   Future<String> _resolveServerUrl() async {
     try {
@@ -42,21 +45,72 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  /// Get or create a persistent unique deviceId for this phone
+  Future<String> getDeviceId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final existing = prefs.getString(_prefDeviceIdKey);
+      if (existing != null && existing.isNotEmpty) {
+        return existing;
+      }
+
+      String id = '';
+      final deviceInfo = DeviceInfoPlugin();
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        final androidInfo = await deviceInfo.androidInfo;
+        id = 'android_${androidInfo.id}';
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        final iosInfo = await deviceInfo.iosInfo;
+        id = 'ios_${iosInfo.identifierForVendor ?? DateTime.now().millisecondsSinceEpoch}';
+      }
+
+      if (id.isEmpty || id.contains('unknown')) {
+        id = 'mob_${DateTime.now().millisecondsSinceEpoch}_${(DateTime.now().microsecondsSinceEpoch % 100000)}';
+      }
+
+      await prefs.setString(_prefDeviceIdKey, id);
+      return id;
+    } catch (_) {
+      return 'mob_${DateTime.now().millisecondsSinceEpoch}';
+    }
+  }
+
+  /// Get human-friendly model or device name
+  Future<String> getDeviceName() async {
+    try {
+      final deviceInfo = DeviceInfoPlugin();
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        final androidInfo = await deviceInfo.androidInfo;
+        final brand = androidInfo.brand;
+        final model = androidInfo.model;
+        if (brand.isNotEmpty && model.isNotEmpty) {
+          final brandCap = brand[0].toUpperCase() + brand.substring(1);
+          return model.toLowerCase().contains(brand.toLowerCase()) ? model : '$brandCap $model';
+        }
+        return 'Android Device';
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        final iosInfo = await deviceInfo.iosInfo;
+        return iosInfo.name.isNotEmpty ? iosInfo.name : 'Apple iPhone';
+      }
+    } catch (_) {}
+    return defaultTargetPlatform == TargetPlatform.iOS ? 'Apple iPhone' : 'Android Device';
+  }
+
   /// Load persisted session from local disk
   Future<bool> loadSavedSession() async {
     if (_isInitialized) return isLoggedIn;
     try {
       final prefs = await SharedPreferences.getInstance();
       final rawUser = prefs.getString(_prefUserKey);
-      final sessionToken = prefs.getString(_prefTokenKey);
+      final savedToken = prefs.getString(_prefTokenKey);
 
       if (rawUser != null && rawUser.isNotEmpty) {
         final data = json.decode(rawUser);
-        _currentUser = UserModel.fromJson(data, sessionToken: sessionToken);
+        _currentUser = UserModel.fromJson(data, sessionToken: savedToken);
         debugPrint('[AuthService] Restored active session for: ${_currentUser?.email}');
 
-        // Silent FCM token sync in background
-        _syncTokenInBackground();
+        // Silent device registration & FCM sync in background
+        registerDeviceWithBackend();
       }
     } catch (e) {
       debugPrint('[AuthService] Error loading saved session: $e');
@@ -78,6 +132,8 @@ class AuthService extends ChangeNotifier {
       final serverUrl = await _resolveServerUrl();
       final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
       final fcmToken = await _getFcmTokenSafely();
+      final deviceId = await getDeviceId();
+      final deviceName = await getDeviceName();
 
       final response = await http.post(
         Uri.parse('$cleanUrl/api/auth/register'),
@@ -88,18 +144,22 @@ class AuthService extends ChangeNotifier {
           'password': password,
           'confirmPassword': confirmPassword,
           'fcmToken': fcmToken,
+          'deviceId': deviceId,
+          'deviceName': deviceName,
           'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID',
-          'deviceName': defaultTargetPlatform == TargetPlatform.iOS ? 'iPhone / iPad' : 'Android Device',
         }),
       ).timeout(const Duration(seconds: 12));
 
       final body = json.decode(response.body);
       if (response.statusCode >= 200 && response.statusCode < 300 && body['success'] == true) {
         final userData = body['data']?['user'] ?? body['data'];
-        final sessionToken = body['data']?['token']?.toString();
+        final savedToken = body['data']?['token']?.toString();
 
-        _currentUser = UserModel.fromJson(userData, sessionToken: sessionToken);
-        await _persistSession(_currentUser!, sessionToken);
+        _currentUser = UserModel.fromJson(userData, sessionToken: savedToken);
+        await _persistSession(_currentUser!, savedToken);
+
+        // Register device
+        await registerDeviceWithBackend();
 
         notifyListeners();
         return {'success': true, 'message': body['message'] ?? 'Account created successfully!'};
@@ -121,6 +181,8 @@ class AuthService extends ChangeNotifier {
       final serverUrl = await _resolveServerUrl();
       final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
       final fcmToken = await _getFcmTokenSafely();
+      final deviceId = await getDeviceId();
+      final deviceName = await getDeviceName();
 
       final response = await http.post(
         Uri.parse('$cleanUrl/api/auth/login'),
@@ -129,18 +191,22 @@ class AuthService extends ChangeNotifier {
           'email': email.trim().toLowerCase(),
           'password': password,
           'fcmToken': fcmToken,
+          'deviceId': deviceId,
+          'deviceName': deviceName,
           'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID',
-          'deviceName': defaultTargetPlatform == TargetPlatform.iOS ? 'iPhone / iPad' : 'Android Device',
         }),
       ).timeout(const Duration(seconds: 12));
 
       final body = json.decode(response.body);
       if (response.statusCode >= 200 && response.statusCode < 300 && body['success'] == true) {
         final userData = body['data']?['user'] ?? body['data'];
-        final sessionToken = body['data']?['token']?.toString();
+        final savedToken = body['data']?['token']?.toString();
 
-        _currentUser = UserModel.fromJson(userData, sessionToken: sessionToken);
-        await _persistSession(_currentUser!, sessionToken);
+        _currentUser = UserModel.fromJson(userData, sessionToken: savedToken);
+        await _persistSession(_currentUser!, savedToken);
+
+        // Link device
+        await registerDeviceWithBackend();
 
         notifyListeners();
         return {'success': true, 'message': body['message'] ?? 'Logged in successfully!'};
@@ -153,20 +219,26 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  /// Logout from current device
+  /// Logout from current device only
   Future<void> logout() async {
     try {
       final serverUrl = await _resolveServerUrl();
       final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
       final fcmToken = await _getFcmTokenSafely();
+      final deviceId = await getDeviceId();
+      final token = sessionToken;
 
       if (_currentUser != null) {
         try {
           await http.post(
             Uri.parse('$cleanUrl/api/auth/logout'),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              if (token != null) 'Authorization': 'Bearer $token',
+            },
             body: json.encode({
               'email': _currentUser!.email,
+              'deviceId': deviceId,
               'fcmToken': fcmToken,
             }),
           ).timeout(const Duration(seconds: 4));
@@ -207,11 +279,11 @@ class AuthService extends ChangeNotifier {
       final body = json.decode(response.body);
       if (response.statusCode >= 200 && response.statusCode < 300 && body['success'] == true) {
         final userData = body['data']?['user'] ?? body['data'];
-        final sessionToken = body['data']?['token']?.toString();
+        final savedToken = body['data']?['token']?.toString();
 
-        _currentUser = UserModel.fromJson(userData, sessionToken: sessionToken);
-        await _persistSession(_currentUser!, sessionToken);
-        _syncTokenInBackground();
+        _currentUser = UserModel.fromJson(userData, sessionToken: savedToken);
+        await _persistSession(_currentUser!, savedToken);
+        await registerDeviceWithBackend();
 
         notifyListeners();
         return {'success': true, 'message': body['message'] ?? 'Password reset successfully!'};
@@ -234,28 +306,146 @@ class AuthService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _syncTokenInBackground() async {
-    if (_currentUser == null) return;
+  /// Register or update this device on the server
+  Future<bool> registerDeviceWithBackend() async {
+    if (_currentUser == null) return false;
     try {
-      final token = await _getFcmTokenSafely();
-      if (token != null && token.isNotEmpty) {
-        final serverUrl = await _resolveServerUrl();
-        final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-        await http.post(
-          Uri.parse('$cleanUrl/api/auth/fcm-sync'),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({
-            'email': _currentUser!.email,
-            'fcmToken': token,
-            'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID',
-            'deviceName': defaultTargetPlatform == TargetPlatform.iOS ? 'iPhone / iPad' : 'Android Device',
-          }),
-        ).timeout(const Duration(seconds: 5));
-      }
-    } catch (_) {}
+      final token = sessionToken;
+      final fcmToken = await _getFcmTokenSafely();
+      if (fcmToken == null || fcmToken.isEmpty) return false;
+
+      final serverUrl = await _resolveServerUrl();
+      final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+      final deviceId = await getDeviceId();
+      final deviceName = await getDeviceName();
+
+      final prefs = await SharedPreferences.getInstance();
+      final notifyEnabled = prefs.getBool('notifications_enabled') ?? true;
+
+      final response = await http.post(
+        Uri.parse('$cleanUrl/api/devices/register'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+        body: json.encode({
+          'deviceId': deviceId,
+          'fcmToken': fcmToken,
+          'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID',
+          'deviceName': deviceName,
+          'notificationsEnabled': notifyEnabled,
+        }),
+      ).timeout(const Duration(seconds: 8));
+
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      debugPrint('[AuthService] registerDeviceWithBackend error: $e');
+      return false;
+    }
   }
 
-  /// Toggle user notification preferences on server & locally
+  /// Get connected devices for the authenticated user
+  Future<List<Map<String, dynamic>>> getConnectedDevices() async {
+    if (_currentUser == null) return [];
+    try {
+      final serverUrl = await _resolveServerUrl();
+      final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+      final currentDeviceId = await getDeviceId();
+      final token = sessionToken;
+
+      final response = await http.get(
+        Uri.parse('$cleanUrl/api/devices'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final body = json.decode(response.body);
+        if (body['success'] == true && body['data'] is List) {
+          return (body['data'] as List).map((d) {
+            final map = Map<String, dynamic>.from(d);
+            map['isCurrentDevice'] = (map['deviceId'] == currentDeviceId);
+            return map;
+          }).toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[AuthService] getConnectedDevices error: $e');
+    }
+    return [];
+  }
+
+  /// Toggle notification setting for a specific device
+  Future<bool> updateDeviceNotifications(String targetDeviceId, bool enabled) async {
+    try {
+      final serverUrl = await _resolveServerUrl();
+      final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+      final token = sessionToken;
+
+      final response = await http.put(
+        Uri.parse('$cleanUrl/api/devices/$targetDeviceId/notifications'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'enabled': enabled}),
+      ).timeout(const Duration(seconds: 8));
+
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      debugPrint('[AuthService] updateDeviceNotifications error: $e');
+      return false;
+    }
+  }
+
+  /// Unlink / remove a device from the account
+  Future<bool> removeDevice(String targetDeviceId) async {
+    try {
+      final serverUrl = await _resolveServerUrl();
+      final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+      final token = sessionToken;
+
+      final response = await http.delete(
+        Uri.parse('$cleanUrl/api/devices/$targetDeviceId'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 8));
+
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      debugPrint('[AuthService] removeDevice error: $e');
+      return false;
+    }
+  }
+
+  /// Send a test push notification to a specific device
+  Future<bool> sendDeviceTestPush(String targetDeviceId) async {
+    try {
+      final serverUrl = await _resolveServerUrl();
+      final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
+      final token = sessionToken;
+
+      final response = await http.post(
+        Uri.parse('$cleanUrl/api/devices/test-push'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'deviceId': targetDeviceId}),
+      ).timeout(const Duration(seconds: 8));
+
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      debugPrint('[AuthService] sendDeviceTestPush error: $e');
+      return false;
+    }
+  }
+
+  /// Toggle overall user notification preferences on server & locally
   Future<bool> updateNotificationPreferences(bool enabled) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -274,18 +464,9 @@ class AuthService extends ChangeNotifier {
         await _persistSession(_currentUser!, _currentUser!.token);
         notifyListeners();
 
-        final serverUrl = await _resolveServerUrl();
-        final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-        final response = await http.post(
-          Uri.parse('$cleanUrl/api/auth/notifications'),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({
-            'email': _currentUser!.email,
-            'enabled': enabled,
-          }),
-        ).timeout(const Duration(seconds: 5));
-
-        return response.statusCode >= 200 && response.statusCode < 300;
+        // Also update the current device record on backend
+        final currentDeviceId = await getDeviceId();
+        await updateDeviceNotifications(currentDeviceId, enabled);
       }
       return true;
     } catch (e) {

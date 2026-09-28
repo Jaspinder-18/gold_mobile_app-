@@ -7,6 +7,8 @@ class UserModel {
   final String? token;
   final bool notificationsEnabled;
 
+  String? get sessionToken => token;
+
   const UserModel({
     required this.id,
     required this.fullName,

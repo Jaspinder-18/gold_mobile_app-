@@ -136,9 +136,23 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     }
 
     final alertUserEmail = (message.data['userEmail']?.toString() ?? '').trim().toLowerCase();
+    final alertUserId = (message.data['targetUserId']?.toString() ?? message.data['userId']?.toString() ?? '').trim();
     final localUserEmail = (prefs.getString('user_email') ?? '').trim().toLowerCase();
+    final rawUserJson = prefs.getString('auth_user_profile_json');
+    String localUserId = '';
+    if (rawUserJson != null && rawUserJson.isNotEmpty) {
+      try {
+        final parsed = json.decode(rawUserJson);
+        localUserId = (parsed['id']?.toString() ?? parsed['_id']?.toString() ?? '').trim();
+      } catch (_) {}
+    }
+
+    if (alertUserId.isNotEmpty && localUserId.isNotEmpty && alertUserId != localUserId) {
+      debugPrint('[FCM Background] Suppressing alert for user: $alertUserId (Device user: $localUserId)');
+      return;
+    }
     if (alertUserEmail.isNotEmpty && localUserEmail.isNotEmpty && alertUserEmail != localUserEmail) {
-      debugPrint('[FCM Background] Ignoring alert for $alertUserEmail (Device user: $localUserEmail)');
+      debugPrint('[FCM Background] Suppressing alert for email: $alertUserEmail (Device email: $localUserEmail)');
       return;
     }
 
@@ -645,10 +659,11 @@ class NotificationService {
       debugPrint('[FCM] Notification authorization status: ${settings.authorizationStatus}');
 
       try {
-        await messaging.subscribeToTopic('all_alerts');
-        debugPrint('[NotificationService] Subscribed to FCM topic: all_alerts');
+        // Completely eliminate all_alerts topic broadcast
+        await messaging.unsubscribeFromTopic('all_alerts');
+        debugPrint('[NotificationService] Unsubscribed from legacy all_alerts topic.');
       } catch (e) {
-        debugPrint('[NotificationService] Topic subscription note: $e');
+        debugPrint('[NotificationService] Legacy topic unsubscribe note: $e');
       }
 
       final resolvedUrl = await _resolveServerUrl(serverUrl);
@@ -677,9 +692,17 @@ class NotificationService {
         }
 
         final alertUserEmail = (message.data['userEmail']?.toString() ?? '').trim().toLowerCase();
-        final localUserEmail = (AuthService().currentUser?.email ?? '').trim().toLowerCase();
+        final alertUserId = (message.data['targetUserId']?.toString() ?? message.data['userId']?.toString() ?? '').trim();
+        final currentUser = AuthService().currentUser;
+        final localUserEmail = (currentUser?.email ?? '').trim().toLowerCase();
+        final localUserId = (currentUser?.id ?? '').trim();
+
+        if (alertUserId.isNotEmpty && localUserId.isNotEmpty && alertUserId != localUserId) {
+          debugPrint('[NotificationService] Suppressing alert for user: $alertUserId (Current user: $localUserId)');
+          return;
+        }
         if (alertUserEmail.isNotEmpty && localUserEmail.isNotEmpty && alertUserEmail != localUserEmail) {
-          debugPrint('[NotificationService] Suppressing alert for $alertUserEmail (This user is $localUserEmail)');
+          debugPrint('[NotificationService] Suppressing alert for email: $alertUserEmail (Current user: $localUserEmail)');
           return;
         }
 
@@ -752,26 +775,55 @@ class NotificationService {
     if (token.isEmpty) return;
     try {
       final cleanUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-      final userEmail = AuthService().currentUser?.email;
+      final currentUser = AuthService().currentUser;
+      final sessionToken = currentUser?.sessionToken;
+      final deviceId = await AuthService().getDeviceId();
+      final deviceName = await AuthService().getDeviceName();
+
+      // 1. Primary endpoint: /api/devices/register
+      if (sessionToken != null && sessionToken.isNotEmpty) {
+        try {
+          final res = await http.post(
+            Uri.parse('$cleanUrl/api/devices/register'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $sessionToken',
+            },
+            body: json.encode({
+              'deviceId': deviceId,
+              'fcmToken': token,
+              'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID',
+              'deviceName': deviceName,
+              'notificationsEnabled': _notificationsEnabled,
+            }),
+          ).timeout(const Duration(seconds: 6));
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            debugPrint('[FCM] Device successfully registered with /api/devices/register: $deviceId');
+            return;
+          }
+        } catch (devErr) {
+          debugPrint('[FCM] /api/devices/register attempt note: $devErr');
+        }
+      }
+
+      // 2. Secondary fallback endpoint: /api/alerts/fcm/register
       final payload = {
         'token': token,
+        'deviceId': deviceId,
         'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'IOS' : 'ANDROID',
-        'deviceName': 'Mobile Client',
+        'deviceName': deviceName,
         'symbolSubscriptions': ['ALL'],
-        if (userEmail != null && userEmail.isNotEmpty) 'email': userEmail,
+        if (currentUser?.email != null && currentUser!.email.isNotEmpty) 'email': currentUser.email,
       };
-      final response = await http
-          .post(
-            Uri.parse('$cleanUrl/api/alerts/fcm/register'),
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode(payload),
-          )
-          .timeout(const Duration(seconds: 5));
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        debugPrint('[FCM] Token registered with backend: $cleanUrl (User: $userEmail)');
-      } else {
-        debugPrint('[FCM] Token registration response status: ${response.statusCode}');
-      }
+      await http.post(
+        Uri.parse('$cleanUrl/api/alerts/fcm/register'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (sessionToken != null) 'Authorization': 'Bearer $sessionToken',
+        },
+        body: json.encode(payload),
+      ).timeout(const Duration(seconds: 5));
+      debugPrint('[FCM] Token synced via fallback registration.');
     } catch (e) {
       debugPrint('[FCM] Token registration error: $e');
     }
